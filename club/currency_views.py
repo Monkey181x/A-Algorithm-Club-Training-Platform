@@ -43,6 +43,9 @@ def api_currency_balance(request):
     if not member.team.currency_enabled:
         return api_error("该团队未启用货币系统", 403)
 
+    if member.pk and not request.user.is_superuser:
+        from .retirement import ensure_retirement_subsidies
+        ensure_retirement_subsidies(request.user.pk)
     balance = get_or_create_balance(member) if member.pk and not request.user.is_superuser else None
     streak = get_current_streak(member) if member.pk and not request.user.is_superuser else 0
 
@@ -255,6 +258,8 @@ def api_shop_items(request):
         return api_error("该团队未启用货币系统", 403)
 
     from .shop_fulfillment import available_stock
+    from .grades import is_retired
+    retired = is_retired(request.user.pk)
     items = ShopItem.objects.filter(team=member.team, is_active=True)
     purchased = dict(Purchase.objects.filter(item__team=member.team, member__user_id=request.user.pk)
                      .order_by().values('item_id').annotate(total=Sum('quantity')).values_list('item_id', 'total'))
@@ -270,6 +275,8 @@ def api_shop_items(request):
         "purchase_limit": item.purchase_limit if item.item_type == 'physical' else 0,
         "purchased_quantity": purchased.get(item.pk, 0),
         "purchase_limit_reached": bool(item.item_type == 'physical' and item.purchase_limit and purchased.get(item.pk, 0) >= item.purchase_limit),
+        "purchase_blocked": item.item_type == 'physical' and retired,
+        "purchase_block_reason": '大三+用户不可购买实物类商品' if item.item_type == 'physical' and retired else '',
     } for item in items]
 
     return JsonResponse({"items": data})

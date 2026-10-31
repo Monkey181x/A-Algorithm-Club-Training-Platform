@@ -31,6 +31,8 @@ API 配置示例：
 
 管理员编辑实物类商品时可设置“限购数量”，0 表示不限购。按同一账号对同一商品的历史订单数量累计，已派送商品仍计入；新设置或降低上限后立即按历史订单判断。达到上限时商品半透明显示并加盖“已达购买上限”印章，购买按钮禁用。服务端在商品锁内再次核验，重复请求不会重复计数，并发请求也不能超过上限。迁移 `0033_shop_item_purchase_limit` 仅增加字段，旧商品默认不限购。
 
+当前年级为“大三+”（注册选择或按学期自动晋升）的账号不参与财富榜，也不能购买实物类商品；商品卡片半透明蒙灰，服务端同样拒绝购买，虚拟商品仍可购买。每个已加入且启用 RBC 的有效团队余额各增加一次 10000，流水来源为“退休金补贴”。领取凭证按账号、团队持久去重，切换团队、重复刷新、退出后重新加入均不重复发放。现有大三+账号会补发，新增团队或之后启用 RBC 的团队也按相同规则处理。读取余额时检查该账号全部团队，每分钟后台任务检查自动晋升及待补发账号。迁移 `0034_retirement_subsidy` 新增发放凭证表及流水类型，不清理既有数据。
+
 印章由内置图片模型生成，文件：`static/images/purchase-limit-stamp.png`。生成提示词：Create a single minimal Chinese rubber-stamp watermark for an ecommerce product purchase-limit overlay. Exact text must be “已达购买上限”, all six Chinese characters accurate, bold readable simplified Chinese, arranged in one horizontal line within a simple thin double-line rounded rectangular stamp border. Muted dusty red ink (#b95c65), flat monochrome, very subtle rubber-stamp ink texture, no other words, no icons, no seals, no shadows, no background, truly transparent alpha. Wide composition 3:1, tightly composed around the stamp with a small transparent margin, straight baseline, crisp readable at 180px display width. This is a small UI asset for an elegant pale rose storefront.
 
 ## 合并与上线

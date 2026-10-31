@@ -82,7 +82,7 @@ class ShopPurchaseLimitTests(TestCase):
 
 class ConcurrentShopPurchaseLimitTests(TransactionTestCase):
     def test_parallel_orders_cannot_exceed_limit(self):
-        root, _ = User.objects.get_or_create(username='admin')
+        root, _ = User.objects.get_or_create(username='admin', defaults={'is_superuser': True, 'is_staff': True})
         team = Team.objects.create(name='Concurrent shop', code='LIMIT-RACE', created_by=root, currency_enabled=True)
         user = User.objects.create_user('concurrent-shop-buyer')
         member = TeamMembership.objects.create(team=team, user=user, display_name='Buyer')

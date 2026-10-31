@@ -796,8 +796,8 @@ html[data-site-radial="true"][data-theme-transition-state="reveal"]::view-transi
 #showcaseView .problem-back-button{flex:0 0 auto;margin:0;order:1;}
 @media(max-width:760px){#showcaseView .gallery-search{flex:1 1 180px;max-width:420px;margin:0;}}
 .fulfillment-code{display:flex;align-items:stretch;min-width:0;border:1px solid var(--site-border,var(--line));border-radius:var(--site-inner-radius,12px);background:var(--site-fill,var(--panel));color:var(--site-text,var(--ink));overflow:hidden;}
-.shop-item-card.is-limit-reached{position:relative;cursor:not-allowed;}
-.shop-item-card.is-limit-reached>:not(.shop-limit-stamp){opacity:.45;filter:grayscale(.75);}
+.shop-item-card:is(.is-limit-reached,.is-purchase-blocked){position:relative;cursor:not-allowed;}
+.shop-item-card:is(.is-limit-reached,.is-purchase-blocked)>:not(.shop-limit-stamp){opacity:.45;filter:grayscale(.75);}
 html body #rbcshopView .shop-item-card>.shop-limit-stamp{position:absolute;z-index:2;left:50%;top:45%;width:78%;max-width:280px;height:auto;object-fit:contain;transform:translate(-50%,-50%) rotate(-12deg);pointer-events:none;}
 .purchase-limit-info{display:block;margin-top:8px;color:var(--site-secondary,var(--muted));}
 #itemPurchaseLimitField small{display:block;line-height:1.6;margin-top:6px;color:var(--site-secondary,var(--muted));}

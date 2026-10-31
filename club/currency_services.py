@@ -211,6 +211,10 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
     except ShopItem.DoesNotExist:
         raise ValueError("商品不存在或已下架")
 
+    from .grades import is_retired
+    if item.item_type == 'physical' and is_retired(member.user_id):
+        raise ValueError('大三+用户不可购买实物类商品')
+
     # The item lock serializes purchases and limit edits before counting history.
     if item.item_type == 'physical' and item.purchase_limit:
         purchased = Purchase.objects.filter(item=item, member__user_id=member.user_id).aggregate(total=Sum('quantity'))['total'] or 0
