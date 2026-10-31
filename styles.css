@@ -868,7 +868,6 @@ button.leader-row:hover{background:var(--teal-soft)}
 
 .pulse-track .pulse-week.is-unlocked span{border-style:dashed}
 
-.primary-button.is-makeup-complete:disabled{background:#e5e9ee;border-color:#d6dce3;color:#7e8896;box-shadow:none;opacity:1;cursor:not-allowed;transform:none}
 
 /* Stronger reminders only on individual claimable problems. */
 .contest-problem.claimable.reward-shake{animation:problem-reward-shake 1.6s ease-in-out infinite;transform-origin:center}

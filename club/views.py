@@ -395,11 +395,11 @@ def dashboard(request):
     submission_dates = dates.copy()
     dates.update(checkins)
 
-    # The fixed date strip is the current calendar week, Monday through Sunday.
-    start = today - timedelta(days=today.weekday())
+    # Include the previous calendar week and the elapsed part of this week.
+    start = today - timedelta(days=today.weekday() + 7)
     weeks = list(semester.weeks.all())
     pulse_days = []
-    for offset in range(7):
+    for offset in range((today - start).days + 1):
         day = start + timedelta(days=offset)
         day_week = next((w for w in weeks if timezone.localdate(w.starts_at) <= day < timezone.localdate(w.ends_at)), None)
         permission = permissions.get(day)
@@ -851,8 +851,9 @@ def semesters(request):
     membership = membership_for(request)
     if not membership:
         return api_error('未加入当前团队', 403)
+    now = timezone.now()
     return JsonResponse({'semesters': [{'id': item.id, 'name': item.name, 'archived': bool(item.archived_at),
-        'weeks': [week.number for week in item.weeks.all()]}
+        'weeks': [week.number for week in item.weeks.all() if week.starts_at <= now]}
         for item in membership.team.semesters.prefetch_related('weeks')]})
 
 

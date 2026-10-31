@@ -108,6 +108,7 @@ function submissionCard(item, moderation = false) {
 
 async function loadShowcase(page = 1) {
   galleryProblem = null;
+  $('#gallerySearch').closest('.gallery-search').hidden = false;
   const version = ++galleryRequest;
   const host = $('#showcaseGrid');
   const more = $('#galleryMore');
@@ -160,6 +161,7 @@ function appendSubmissionDays(host, submissions) {
 
 async function openProblem(id, page = 1) {
   galleryProblem = id;
+  $('#gallerySearch').closest('.gallery-search').hidden = true;
   const version = ++galleryRequest;
   const host = $('#showcaseGrid');
   const more = $('#galleryMore');
@@ -170,7 +172,7 @@ async function openProblem(id, page = 1) {
   if (page === 1) host.innerHTML = '<div class="queue-empty">正在加载全部历史题解…</div>';
   more.hidden = true;
   try {
-    const data = await communityRequest(`/api/problems/${id}/submissions?page=${page}&q=${galleryQuery()}`);
+    const data = await communityRequest(`/api/problems/${id}/submissions?page=${page}`);
     if (version !== galleryRequest) return;
     $('#problemHeading').textContent = uiProblemTitle(data.problem.title);
     const link = $('#problemOriginal');

@@ -11,6 +11,7 @@ from PIL import Image, UnidentifiedImageError
 from datetime import datetime, timedelta
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import Sum
 from django.db.models.deletion import ProtectedError
 from django.http import JsonResponse, FileResponse, Http404
 from django.utils import timezone
@@ -255,6 +256,8 @@ def api_shop_items(request):
 
     from .shop_fulfillment import available_stock
     items = ShopItem.objects.filter(team=member.team, is_active=True)
+    purchased = dict(Purchase.objects.filter(item__team=member.team, member__user_id=request.user.pk)
+                     .order_by().values('item_id').annotate(total=Sum('quantity')).values_list('item_id', 'total'))
 
     data = [{
         "id": item.id,
@@ -263,7 +266,10 @@ def api_shop_items(request):
         "icon": shop_item_icon_url(item),
         "price": item.price,
         "stock": available_stock(item),
-        "item_type": item.item_type
+        "item_type": item.item_type,
+        "purchase_limit": item.purchase_limit if item.item_type == 'physical' else 0,
+        "purchased_quantity": purchased.get(item.pk, 0),
+        "purchase_limit_reached": bool(item.item_type == 'physical' and item.purchase_limit and purchased.get(item.pk, 0) >= item.purchase_limit),
     } for item in items]
 
     return JsonResponse({"items": data})
@@ -441,7 +447,7 @@ def api_admin_shop_items(request):
     if request.method=='GET':
         from .shop_fulfillment import admin_card_data
         return JsonResponse({'items':[{**admin_card_data(i),'id':i.pk,'name':i.name,'description':i.description,'price':i.price,
-            'stock':i.stock,'is_active':i.is_active,'item_type':i.item_type,'icon':shop_item_icon_url(i)} for i in ShopItem.objects.filter(team=member.team)]})
+            'stock':i.stock,'is_active':i.is_active,'item_type':i.item_type,'purchase_limit':i.purchase_limit,'icon':shop_item_icon_url(i)} for i in ShopItem.objects.filter(team=member.team)]})
     data=body(request)
     if request.method=='POST':item=ShopItem(team=member.team,price=1)
     else:
@@ -456,13 +462,17 @@ def api_admin_shop_items(request):
             if name:FileDeletion.objects.create(name=name)
         except ProtectedError:return api_error('商品已有购买记录或用户库存，请改为下架以保留历史记录',409)
         return JsonResponse({'success':True})
-    values={key:data.get(key,getattr(item,key)) for key in ['name','description','price','stock','is_active','item_type']}
+    values={key:data.get(key,getattr(item,key)) for key in ['name','description','price','stock','is_active','item_type','purchase_limit']}
     if not isinstance(values['name'],str) or not 1<=len(values['name'].strip())<=100:return api_error('商品名称需为1–100字')
     if not isinstance(values['description'],str):return api_error('商品说明格式无效')
     if type(values['price']) is not int or not 1<=values['price']<=2147483647:return api_error('商品价格必须为正整数')
     if type(values['stock']) is not int or not -1<=values['stock']<=2147483647:return api_error('库存必须为-1（无限）或非负整数')
     if type(values['is_active']) is not bool:return api_error('上架状态格式无效')
     if values['item_type'] not in ['general','makeup_ticket','consumable','redeem_code','physical']:return api_error('商品类型无效')
+    if type(values['purchase_limit']) is not int or not 0<=values['purchase_limit']<=2147483647:return api_error('限购数量必须为0（不限购）或正整数')
+    if values['item_type'] != 'physical':
+        if data.get('purchase_limit', 0):return api_error('仅实物类商品支持限购数量')
+        values['purchase_limit'] = 0
     if item.pk and values['item_type']!=item.item_type and (item.purchases.exists() or item.user_inventories.exists()):
         return api_error('已有购买或库存的商品不能更改类型，请新增商品',409)
     from .shop_fulfillment import validate_card_settings, append_codes

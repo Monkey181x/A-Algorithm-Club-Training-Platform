@@ -96,6 +96,8 @@ html[data-site-theme-active="true"] .page-heading h1{color:var(--site-text)!impo
 #dashboardView .activity-day-heading strong{font-size:13px;line-height:1.6;}
 .activity-day-heading .secondary-button{padding:7px 10px;font-size:12px;min-height:32px;}
 .activity-records{max-height:230px;overflow-y:auto;margin-top:12px;}
+.activity-records:has(>.activity-empty){display:grid;place-items:center;min-height:160px;text-align:center;}
+html body #activityRecords>.activity-empty{font-weight:700;margin:0;padding:24px 12px;}
 .activity-record{display:flex;align-items:center;gap:12px;padding:12px 14px;margin:7px 0;border-radius:10px;background:var(--teal-soft);}
 .activity-record>div{flex:1;min-width:0;}.activity-record small{display:block;font-size:10px;color:var(--muted);margin-bottom:5px;}
 .activity-record a,.activity-record strong{font-size:13px;color:var(--ink);line-height:1.6;overflow-wrap:anywhere;text-decoration:none;}.activity-record a:hover{text-decoration:underline;}
@@ -378,8 +380,9 @@ html[data-heatmap-month-gap="false"] #activityHeatmap .activity-month-sections{g
 #dashboardView .training-metrics .score-progress-dots{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:6px;margin:12px 0 0;}
 #dashboardView .training-metrics .score-progress-dots i{display:block;flex:none;width:6px;height:6px;border-radius:50%;background:color-mix(in srgb,var(--site-accent,var(--teal)) 18%,var(--site-fill,var(--panel)));}
 #dashboardView .training-metrics .score-progress-dots i.done{background:var(--site-accent,var(--teal))!important;}
-#dashboardView .training-activity .pulse-track{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));overflow:visible;scroll-snap-type:none;touch-action:pan-y;cursor:default;}
-#dashboardView .training-activity .pulse-track .pulse-week{min-width:0;width:100%;padding-left:2px;padding-right:2px;scroll-snap-align:none;}
+#dashboardView .training-activity .pulse-track{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:none;scroll-behavior:auto;touch-action:pan-y;overscroll-behavior-x:contain;cursor:grab;}
+#dashboardView .training-activity .pulse-track.is-dragging{cursor:grabbing;}
+#dashboardView .training-activity .pulse-track .pulse-week{flex:0 0 calc((100% - 18px)/7);min-width:0;width:auto;padding-left:2px;padding-right:2px;scroll-snap-align:none;cursor:inherit;}
 #submissionTargetDate{font-size:12px;line-height:1.6;color:var(--site-secondary,var(--muted));font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
 @media(max-width:760px){#dashboardView .training-activity .pulse-week small{font-size:10px;}}
 .overview-week-meta{display:flex;align-items:center;flex-wrap:wrap;column-gap:14px;row-gap:4px;margin-bottom:12px;}
@@ -792,8 +795,27 @@ html[data-site-radial="true"][data-theme-transition-state="reveal"]::view-transi
 #showcaseView .gallery-search{flex:0 1 420px;max-width:420px;margin:0;order:0;}
 #showcaseView .problem-back-button{flex:0 0 auto;margin:0;order:1;}
 @media(max-width:760px){#showcaseView .gallery-search{flex:1 1 180px;max-width:420px;margin:0;}}
-.fulfillment-code{padding:14px;border:1px solid var(--site-border,var(--line));border-radius:var(--site-inner-radius,12px);background:var(--site-fill,var(--panel));color:var(--site-text,var(--ink));white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;}
-.fulfillment-status{display:inline-flex;padding:5px 9px;border:1px solid var(--site-border,var(--line));border-radius:var(--site-inner-radius,10px);color:var(--site-text,var(--ink));background:var(--site-fill,var(--panel));}
+.fulfillment-code{display:flex;align-items:stretch;min-width:0;border:1px solid var(--site-border,var(--line));border-radius:var(--site-inner-radius,12px);background:var(--site-fill,var(--panel));color:var(--site-text,var(--ink));overflow:hidden;}
+.shop-item-card.is-limit-reached{position:relative;cursor:not-allowed;}
+.shop-item-card.is-limit-reached>:not(.shop-limit-stamp){opacity:.45;filter:grayscale(.75);}
+html body #rbcshopView .shop-item-card>.shop-limit-stamp{position:absolute;z-index:2;left:50%;top:45%;width:78%;max-width:280px;height:auto;object-fit:contain;transform:translate(-50%,-50%) rotate(-12deg);pointer-events:none;}
+.purchase-limit-info{display:block;margin-top:8px;color:var(--site-secondary,var(--muted));}
+#itemPurchaseLimitField small{display:block;line-height:1.6;margin-top:6px;color:var(--site-secondary,var(--muted));}
+#showcaseView .gallery-search[hidden]{display:none!important;}
+.fulfillment-code>pre{flex:1;min-width:0;margin:0;padding:14px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;}
+html body #rbcshopView .fulfillment-code>button{flex:none;align-self:stretch;margin:0;padding:0 14px;border:0;border-left:1px solid var(--site-border,var(--line));border-radius:0;background:transparent!important;box-shadow:none;}
+.fulfillment-code>button:focus-visible{outline:2px solid var(--site-accent,var(--teal));outline-offset:-3px;}
+/* Moving indicators own the selection surface; buttons must not leave a second fill behind. */
+html:root body :is(#dashboardView,.page-view,.modal-backdrop,.personal-page,[data-site-themed]) .segmented:has(>.segment-indicator)>.segment,
+html:root body #mainSidebar.sidebar.glass-menu-ready .nav-item,
+html:root body .auth-tabs:has(>.auth-glass-indicator)>[data-auth-tab]{background:transparent!important;background-image:none!important;box-shadow:none!important;}
+html body .segmented:has(>.segment-indicator)>.segment::after{display:none!important;}
+html body #dashboardView .training-activity .pulse-track,
+html body #dashboardView .training-activity .pulse-week{-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;}
+html body #dashboardView .training-activity .pulse-week:focus:not(:focus-visible){outline:none;}
+html body #dashboardView .training-activity .pulse-week:focus-visible{outline:2px solid var(--site-accent,var(--teal));outline-offset:2px;border-radius:var(--site-inner-radius,12px);}
+/* Preserve the themed button colors and dim completed days with opacity only. */
+html:root body :is(#openSubmission,#openSubmissionSecondary).primary-button:disabled{box-shadow:none!important;opacity:.5;cursor:not-allowed;transform:none!important;}
 .dispatch-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid var(--site-border,var(--line));}
 .dispatch-row>div{display:grid;gap:5px;min-width:0;}.dispatch-row small{color:var(--site-secondary,var(--muted));overflow-wrap:anywhere;}
 #cardSourceFields .form-group{margin-bottom:16px;}#cardSourceFields textarea{width:100%;min-height:130px;box-sizing:border-box;font-family:Consolas,monospace;white-space:pre;border-radius:var(--site-inner-radius,12px);padding:10px;}#cardSourceFields small{display:block;line-height:1.6;margin-top:6px;overflow-wrap:anywhere;}

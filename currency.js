@@ -470,16 +470,17 @@ const CurrencyModule = (() => {
         </div>
         <div class="shop-grid">
           ${backpack && inventoryResult.error ? `<div class="empty-state" role="alert">${escape(inventoryResult.error)}<button class="text-button" data-inventory-retry type="button">重试</button></div>` : displayItems.length === 0 ? `<div class="empty-state">${backpack ? '背包里还没有物品' : '暂无商品'}</div>` : displayItems.map(item => `
-            <div class="shop-item-card">
+            <div class="shop-item-card${!backpack && item.purchase_limit_reached ? ' is-limit-reached' : ''}">
+              ${!backpack && item.purchase_limit_reached ? '<img class="shop-limit-stamp" src="/static/images/purchase-limit-stamp.png" alt="已达购买上限" />' : ''}
               <div class="shop-item-icon">
                 ${item.icon ? `<img src="${escape(item.icon)}" alt="${escape(item.name)}" />` : '<span class="placeholder-icon">📦</span>'}
               </div>
               <div class="shop-item-info">
                 <h3>${escape(item.name)}</h3>
                 <p>${escape(item.description)}</p>
-                ${backpack && item.status ? `<span class="fulfillment-status">${({ready:'待核销',redeemed:'已核销',dispatching:'派发中',delivered:'派送成功'})[item.status]||''}</span>` : ''}
-                ${backpack && item.code ? `<pre class="fulfillment-code"><code>${escape(item.code)}</code></pre><button class="secondary-button" type="button" data-copy-card="${item.fulfillment_id}">复制卡密</button>` : ''}
+                ${backpack && item.code ? `<div class="join fulfillment-code"><pre class="join-item"><code>${escape(item.code)}</code></pre><button class="join-item secondary-button" type="button" data-copy-card="${item.fulfillment_id}">复制</button></div>` : ''}
                 ${!backpack && item.stock !== -1 ? `<small class="stock-info">库存: ${item.stock}</small>` : ''}
+                ${!backpack && item.purchase_limit ? `<small class="purchase-limit-info">每人限购 ${item.purchase_limit} 件 · 已购 ${item.purchased_quantity} 件</small>` : ''}
               </div>
               <div class="shop-item-footer">
                 ${backpack ? `${item.status ? `<span class="shop-owned-label">${({ready:'待核销',redeemed:'已核销',dispatching:'派发中',delivered:'派送成功'})[item.status]}</span>` : `<span class="shop-owned-label">当前拥有</span><strong class="shop-owned-count">${item.quantity}<small> 个</small></strong>`}${item.can_redeem ? `<button class="primary-button" type="button" data-redeem-card="${item.fulfillment_id}">消耗并获取卡密</button>` : ''}` : `
@@ -490,14 +491,14 @@ const CurrencyModule = (() => {
                 <button
                   class="primary-button shop-buy-btn"
                   data-item-id="${item.id}"
-                  ${item.stock === 0 || !currencyData.canPurchase ? 'disabled' : ''}
+                  ${item.stock === 0 || item.purchase_limit_reached || !currencyData.canPurchase ? 'disabled' : ''}
                 >
                   <svg class="shop-cart-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                     <path d="M3.5 4.5h2l1.7 9.1a1.7 1.7 0 0 0 1.7 1.4h7.8a1.7 1.7 0 0 0 1.6-1.2l1.3-5.1H7.1" />
                     <circle cx="9.2" cy="19" r="1.2" />
                     <circle cx="17.2" cy="19" r="1.2" />
                   </svg>
-                  ${!currencyData.canPurchase ? '管理预览' : item.stock === 0 ? '已售罄' : '购买'}
+                  ${!currencyData.canPurchase ? '管理预览' : item.purchase_limit_reached ? '已达购买上限' : item.stock === 0 ? '已售罄' : '购买'}
                 </button>
                 `}
               </div>
