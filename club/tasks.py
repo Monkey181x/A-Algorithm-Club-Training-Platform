@@ -17,6 +17,8 @@ def settle_and_cleanup():
     from .models import Team
     for team in Team.objects.filter(semesters__calendar_managed=True).distinct():
         ensure_current_semester(team)
+    from .retirement import sync_retirement_subsidies
+    retirement = sync_retirement_subsidies()
     purge_files()
     Problem.objects.filter(status__in=['pending', 'running'], requested_at__lt=now - timedelta(minutes=10)).update(status='failed', error='任务超时，请手动重新解析')
     blocked_semesters = []
@@ -34,7 +36,7 @@ def settle_and_cleanup():
     retryable = Q(status__in=['scheduled', 'failed']) | Q(status='running', started_at__lt=now - timedelta(minutes=10))
     for job in CleanupJob.objects.filter(retryable, scheduled_for__lte=now):
         run_cleanup.delay(job.pk)
-    return {'checked_at': now.isoformat(), 'needs_week_repair': blocked_semesters}
+    return {'checked_at': now.isoformat(), 'needs_week_repair': blocked_semesters, 'retirement': retirement}
 
 
 @shared_task

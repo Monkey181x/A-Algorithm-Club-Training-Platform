@@ -322,6 +322,7 @@ class CurrencyTransaction(models.Model):
     CONTEST_REWARD = "contest_reward"
     PURCHASE = "purchase"
     ADMIN_ADJUST = "admin_adjust"
+    RETIREMENT_SUBSIDY = "retirement_subsidy"
 
     TYPE_CHOICES = [
         (CHECKIN, "每日签到"),
@@ -329,6 +330,7 @@ class CurrencyTransaction(models.Model):
         (CONTEST_REWARD, "比赛过题奖励"),
         (PURCHASE, "商店购买"),
         (ADMIN_ADJUST, "管理员调整"),
+        (RETIREMENT_SUBSIDY, "退休金补贴"),
         ("tip_sent", "打赏支出"),
         ("tip_received", "收到打赏"),
     ]
@@ -439,6 +441,18 @@ class ContestSubmission(models.Model):
 
     def __str__(self):
         return f"{self.member.display_name} - {self.contest_name} ({self.problems_solved}题)"
+
+
+class RetirementSubsidy(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='retirement_subsidies')
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='retirement_subsidies')
+    member = models.ForeignKey(TeamMembership, null=True, on_delete=models.SET_NULL)
+    transaction = models.OneToOneField(CurrencyTransaction, null=True, on_delete=models.SET_NULL)
+    amount = models.PositiveIntegerField(default=10000)
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['user', 'team'], name='unique_user_team_retirement_subsidy')]
 
 
 class ShopItem(models.Model):

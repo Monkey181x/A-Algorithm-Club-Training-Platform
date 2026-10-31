@@ -26,3 +26,8 @@ def validate_grade(value):
     if type(value) is int and value in range(5):
         return value
     raise ValueError('请选择年级：大一上、大一下、大二上、大二下或大三+')
+
+
+def is_retired(user_id):
+    from .models import UserProfile
+    return grade_on(UserProfile.objects.filter(user_id=user_id).first()) == 4
