@@ -292,7 +292,7 @@ def team_configuration(request, team_id):
             'name': team.name,
             'code': team.code,
             'cleanup': cleanup_schedule_data(semester),
-            'semester': {k: getattr(semester, k) for k in ['name', 'min_submissions', 'min_score', 'require_both', 'screenshot_points', 'logic_points', 'blog_points']} if semester else None,
+            'semester': {k: getattr(semester, k) for k in ['name', 'starts_on', 'ends_on', 'calendar_managed', 'min_submissions', 'min_score', 'require_both', 'screenshot_points', 'logic_points', 'blog_points']} if semester else None,
             **config_data(team)
         })
     if request.method != 'PUT':
@@ -310,6 +310,24 @@ def team_configuration(request, team_id):
         validate_config(data)
     except ValueError as exc:
         return api_error(str(exc))
+    if semester and 'custom_semester_dates' in data:
+        from datetime import date
+        from .semester_calendar import align_semester
+        if type(data['custom_semester_dates']) is not bool:
+            return api_error('自定义学期日期开关无效')
+        dates=None
+        if data['custom_semester_dates']:
+            try:
+                dates=(date.fromisoformat(data.get('starts_on','')),date.fromisoformat(data.get('ends_on','')))
+            except (ValueError,TypeError):
+                return api_error('请选择有效的学期开始和结束日期')
+            if not dates[0] <= timezone.localdate() <= dates[1]:
+                return api_error('当前学期日期须包含今天')
+        if dates != (semester.starts_on,semester.ends_on) or semester.calendar_managed == data['custom_semester_dates']:
+            try:
+                semester=align_semester(semester,dates=dates)
+            except ValidationError as exc:
+                return api_error('; '.join(exc.messages))
     team.name, team.code = name, code
     team.save()
     if semester:

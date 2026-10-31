@@ -6,6 +6,7 @@ let workbenchConfirmResolver = null;
 document.querySelector('#adminView').innerHTML = `
   <div class="page-heading"><div><p class="kicker">团队管理</p><h1>管理工作台</h1><p class="muted" id="workbenchDescription"></p></div><button class="secondary-button" id="refreshReports">刷新工作台</button></div>
   <div class="workbench-scope panel" id="wbManagedScope" hidden><label>当前管理团队 <select id="wbManagedTeam" aria-label="当前管理团队"></select></label></div>
+  <section class="panel workbench-panel" id="wbDispatchSection" hidden><div class="panel-heading"><div><p class="section-label">DELIVERY INBOX</p><h2>待派发商品 <span id="wbDispatchCount"></span></h2></div></div><div id="wbDispatchList"></div></section>
   <section class="panel workbench-panel" id="wbParserSection" hidden><div class="panel-heading"><div><p class="section-label">PROBLEM PARSER</p><h2>题目解析与 API 配置</h2></div></div>
     <form id="wbParserForm" class="workbench-form"><label>解析模式<select name="mode"><option value="auto">自动解析</option><option value="ai">AI解析</option><option value="smart">智能解析：自动失败后使用AI</option></select></label><label class="workbench-check"><input name="enabled" type="checkbox">启用 AI 调用</label><label>API 地址<input name="base_url" type="url" maxlength="500" placeholder="https://api.example.com/v1"></label><label>调用协议<select name="api_protocol"><option value="chat">Chat Completions（兼容模式）</option><option value="responses">Responses（启用联网搜索）</option></select></label><label>Model<input name="model" maxlength="200" placeholder="模型名称"></label><label>API Key<input name="api_key" type="password" autocomplete="new-password" maxlength="4096" placeholder="留空保留已保存的 Key"><small id="wbKeyHint"></small></label><label class="workbench-check"><input name="clear_key" type="checkbox">清除已保存的 Key</label><div class="workbench-form-actions"><button class="primary-button" type="submit">保存解析配置</button><button class="secondary-button" type="button" id="wbTestParser">测试已保存的 AI 配置</button></div></form><p class="muted workbench-hint">自动解析直接读取网页；AI解析只发送题目网址，所配置服务需支持联网；CPA/Codex 可选择 Responses 协议显式启用联网工具。已有题目不会重复解析。测试会发送一次示例题目请求。</p>
     <h3>洛谷提交记录查询</h3><form id="wbLuoguQueryForm" class="workbench-form"><label>全站查询 Cookie<input name="cookie" type="password" autocomplete="new-password" maxlength="8192" placeholder="_uid=…; __client_id=…"><small id="wbLuoguCookieHint"></small></label><label class="workbench-check"><input name="clear_cookie" type="checkbox">清除查询 Cookie</label><div><button class="primary-button" type="submit">保存查询配置</button></div></form><p class="muted">统一用于查询成员的公开提交时间，加密保存；受隐私保护的记录不保证可查询。成员无需填写 Cookie。</p>
@@ -45,7 +46,7 @@ async function loadWorkbench() {
       workbench$('#reportsMore').hidden = true;
       return;
     }
-    const tasks = [loadAdminQueue(), loadPendingProblems(1, version)];
+    const tasks = [loadAdminQueue(), loadPendingProblems(1, version), loadDispatchInbox()];
     if (me.site_admin) tasks.push(loadWorkbenchTeams(version), loadParserConfig(version), loadSystemBackups());
     const results = await Promise.allSettled(tasks);
     for (const result of results) if (result.status === 'rejected') showToast(result.reason.message || '工作台加载失败');
@@ -146,9 +147,17 @@ async function openTeamSettings(id, force = false) {
   if (!host.hidden && !force) { host.hidden = true; return; }
   const data = await communityRequest(`/api/management/teams/${id}/settings`);
   const semester = data.semester;
+  const datesMarkup=semester ? `<fieldset class="workbench-semester-dates"><legend>当前学期日期</legend><label class="workbench-check"><input name="custom_semester_dates" type="checkbox" ${!semester.calendar_managed?'checked':''}>自定义学期日期</label><div class="workbench-date-fields"><label>开始日期<input name="starts_on" type="date" value="${escapeHtml(semester.starts_on)}" required ${semester.calendar_managed?'disabled':''}></label><label>结束日期<input name="ends_on" type="date" value="${escapeHtml(semester.ends_on)}" required ${semester.calendar_managed?'disabled':''}></label></div><p class="muted">开启后按所选日期显示学期热力图；关闭并保存后恢复自动学期（2月15日、8月1日切换）。日期范围须包含今天，且不能排除已有提交。</p></fieldset>` : '';
   const numeric = [['min_submissions','每周提交要求'],['min_score','每周积分要求'],['screenshot_points','截图积分'],['logic_points','题解积分'],['blog_points','Blog积分']];
   host.innerHTML = cleanupScheduleMarkup(data.cleanup, id, Boolean(semester)) + `<form class="workbench-form" data-team-settings-form="${id}"><label>团队名称<input name="name" required maxlength="80" value="${escapeHtml(data.name)}"></label><label>团队码<input name="code" required maxlength="32" value="${escapeHtml(data.code)}"></label>${semester ? numeric.map(([key,label]) => `<label>${label}<input name="${key}" type="number" min="0" max="100000" required value="${semester[key]}"></label>`).join('') + `<label class="workbench-check"><input name="require_both" type="checkbox" ${semester.require_both ? 'checked' : ''}>提交次数和积分均需达标</label>` : '<p class="muted">当前团队没有活动学期。</p>'}<div class="workbench-form-actions"><button class="primary-button" type="submit">保存团队配置</button></div></form>`;
   host.hidden = false;
+  const settingsForm=host.querySelector('[data-team-settings-form]');
+  if(settingsForm && datesMarkup){
+    settingsForm.querySelector('.workbench-form-actions').insertAdjacentHTML('beforebegin',datesMarkup);
+    settingsForm.elements.custom_semester_dates.addEventListener('change',event=>{
+      for(const name of ['starts_on','ends_on'])settingsForm.elements[name].disabled=!event.target.checked;
+    });
+  }
   if (workbenchProfile?.site_admin && window.CurrencyAdminModule) {
     const currencyPanel=document.createElement('div'); currencyPanel.className='workbench-currency-settings'; host.append(currencyPanel);
     await window.CurrencyAdminModule.renderConfigPanel(currencyPanel,id);
@@ -167,6 +176,7 @@ workbench$('#adminView').addEventListener('submit', async event => {
       const data = Object.fromEntries(new FormData(form));
       ['min_submissions','min_score','screenshot_points','logic_points','blog_points','daily_checkin_reward'].forEach(k => { if (k in data) data[k]=Number(data[k]); });
       data.require_both = form.elements.require_both?.checked || false;
+      if(form.elements.custom_semester_dates)data.custom_semester_dates=form.elements.custom_semester_dates.checked;
       await communityRequest(`/api/management/teams/${form.dataset.teamSettingsForm}/settings`,workbenchJSON('PUT',data));
       await loadWorkbenchTeams(); await loadLiveData(); showToast('团队配置已保存');
     }
@@ -330,3 +340,11 @@ workbench$('#wbAdminPasswordForm').onsubmit=async event=>{
   try{const data=await communityRequest('/api/management/password',workbenchJSON('POST',Object.fromEntries(new FormData(form))));if(!data.ok||!data.logout)throw new Error('未收到密码保存确认，请重新核对');form.reset();location.replace('/auth.html?notice=password-changed');}
   catch(error){message.textContent=error.message;}finally{button.disabled=false;}
 };
+
+async function loadDispatchInbox(){
+  const section=workbench$('#wbDispatchSection');if(!workbenchProfile?.can_manage_current||adminTestMode){section.hidden=true;return;}
+  section.hidden=false;const result=await communityRequest('/api/currency/admin/dispatch');
+  workbench$('#wbDispatchCount').textContent=`（${result.pending_count}）`;
+  workbench$('#wbDispatchList').innerHTML=result.orders.length?result.orders.map(order=>`<div class="dispatch-row"><div><strong>${escapeHtml(order.item_name)}</strong><small>${escapeHtml(order.team_name||'')} · ${escapeHtml(order.member_name)} · ${new Date(order.purchased_at).toLocaleString('zh-CN')}</small></div><button class="secondary-button" data-deliver="${order.id}">确认已派发</button></div>`).join(''):'<p class="muted">暂无待派发商品</p>';
+  section.querySelectorAll('[data-deliver]').forEach(button=>button.onclick=async()=>{if(!await clubDialog.confirm({title:'确认派发',text:'确认你已人工发放这件商品？',confirmText:'确认已派发'}))return;button.disabled=true;try{await communityRequest('/api/currency/admin/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:Number(button.dataset.deliver)})});await loadDispatchInbox();}catch(error){showToast(error.message);button.disabled=false;}});
+}

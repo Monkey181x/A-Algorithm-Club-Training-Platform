@@ -1,12 +1,21 @@
 from django.urls import path
 from . import extension_views
+from .activity_views import training_activity
 from . import profile_views
 from . import contest_progress_views
 
 from . import contest_views, daily_views, views, community_views as community, management_views as management, currency_views as currency
 from . import system_management_views as system_management
 
+from .admin_test_mode import toggle as toggle_test_mode
+
+from . import shop_fulfillment
+
 urlpatterns = [
+    path("currency/inventory/<int:unit_id>/redeem", shop_fulfillment.redeem),
+    path("currency/admin/dispatch", shop_fulfillment.dispatch_inbox),
+    path("admin-test-mode", toggle_test_mode),
+    path('training-activity', training_activity),
     path('management/password', system_management.change_admin_password),
     path('management/backups', system_management.backup_collection),
     path('management/backups/import', system_management.import_backup),

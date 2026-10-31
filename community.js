@@ -1,47 +1,49 @@
-let galleryWeek = '';
-let galleryWeekControl = null;
-
-function updateGalleryWeeks(data) {
-  const select = $('#galleryWeek');
-  const weeks = data.weeks.map(week => ({value: String(week.id), text: week.label, current: String(week.id) === String(data.current_week)}));
-  if (!data.week) weeks.unshift({value: '', text: '暂无已开始的周次'});
-  if (!galleryWeekControl) {
-    select.innerHTML = weeks.map(week => `<option value="${escapeHtml(week.value)}">${escapeHtml(week.text)}</option>`).join('');
-    select.value = galleryWeek;
-    if (window.TomSelect) {
-      galleryWeekControl = new TomSelect(select, {
-        options: weeks,
-        create: false, maxItems: 1, maxOptions: null, allowEmptyOption: true,
-        searchField: ['text'], sortField: [{field: '$order'}],
-        plugins: ['dropdown_input'], placeholder: '选择展示周次',
-        render: {
-          option(item, escape) {
-            const match = item.text.match(/^(.*?)\s*·\s*(第\s*\d+\s*周)$/);
-            return `<div class="week-option${item.current ? ' is-current-week' : ''}"><span>${escape(match ? match[1] : item.text)}</span><span class="week-option-label">${item.current ? '<small class="current-week-tag">本周</small>' : ''}${match ? `<strong>${escape(match[2])}</strong>` : ''}</span></div>`;
-          },
-          no_results() { return '<div class="no-results">未找到匹配的周次</div>'; }
-        },
-        onInitialize() { this.control.setAttribute('aria-label', '选择展示周次'); },
-        onDropdownOpen() {
-          const input = this.dropdown.querySelector('input');
-          if (input) { input.placeholder = '搜索学期或周次…'; input.setAttribute('aria-label', '搜索学期或周次'); }
-        }
-      });
-    }
-  } else {
-    galleryWeekControl.clear(true);
-    galleryWeekControl.clearOptions();
-    galleryWeekControl.addOptions(weeks);
-    galleryWeekControl.setValue(galleryWeek, true);
-    galleryWeekControl.refreshOptions(false);
-  }
-  return weeks.find(week => week.value === galleryWeek)?.text;
+function uiProblemTitle(title){if(/^https?:\/\//i.test(title||''))return '题目名称待解析';return adminTestMode&&title==='测试题目'?'未命名题目':title||'未命名题目';}
+function uiMemberName(name){return adminTestMode&&/^管理员测试用户(?:（测试）)?$/.test(name||'')?'管理员':name||'成员';}
+function problemPlatformMarkup(url){
+  let host='';try{host=new URL(url).hostname.toLowerCase();}catch{}
+  const matches=domain=>host===domain||host.endsWith('.'+domain);
+  let label='本站',short='题',icon='';
+  if(matches('leetcode.cn')||matches('leetcode.com')){label='力扣';icon='leetcode.ico';}
+  else if(matches('nowcoder.com')){label='牛客';icon='nowcoder.ico';}
+  else if(matches('codeforces.com')){label='Codeforces';short='CF';}
+  else if(matches('luogu.com.cn')){label='洛谷';short='洛';}
+  else if(matches('atcoder.jp')){label='AtCoder';short='At';}
+  else if(matches('acwing.com')){label='AcWing';short='Ac';}
+  return `<span class="problem-platform-badge" title="${label}" aria-label="题目平台：${label}">${icon?`<img src="/static/platforms/${icon}" alt="${label}" width="26" height="26">`:`<span>${short}</span>`}</span>`;
 }
+function parseSubmissionCode(markdown){
+  const match=(markdown||'').match(/^(`{3,})([a-z0-9_+-]*)\n([\s\S]*?)\n\1$/i);
+  return match?{language:match[2]||'text',code:match[3]}:{language:'text',code:markdown||''};
+}
+
+let gallerySearchTimer;
+function galleryQuery(){return encodeURIComponent($('#gallerySearch')?.value.trim()||'');}
+
 let galleryProblem = null;
 let galleryRequest = 0;
 let reportRequest = 0;
 let resubmitting = null;
 let editingSubmission = null;
+let submissionEditReturnState=null;
+function captureEditReturn(){
+ return {key:activeReviewKey,history:reviewReturnsToHistory,open:$('#reviewModal').classList.contains('open'),tab:$('#reviewCodeTab').getAttribute('aria-selected')==='true'?'code':'blog',scroll:[...document.querySelectorAll('#reviewModal .review-modal,#reviewCode,#reviewBlog,#reviewModal .review-supporting-materials')].map(el=>[el,el.scrollLeft,el.scrollTop])};
+}
+function restoreEditReturn(state){
+ if(!state?.open)return;
+ openReview(state.key,state.history);selectReviewMaterial(state.tab);
+ requestAnimationFrame(()=>{for(const[el,x,y]of state.scroll){el.scrollLeft=x;el.scrollTop=y;}$('#editOwnSubmission').focus({preventScroll:true});});
+}
+function cancelSubmissionEdit(){
+ const state=submissionEditReturnState;submissionEditReturnState=null;
+ closeModal();editingSubmission=null;resubmitting=null;resetSubmissionForm();restoreEditReturn(state);
+}
+function setDetailAvatar(holder,id,name){
+ holder.textContent=(name||'').slice(0,1);holder.classList.add('synced-member-avatar');
+  delete holder.dataset.avatarMember;
+ if(!id)return;holder.dataset.avatarMember=String(id);
+ const image=document.createElement('img');image.src=`/api/members/${Number(id)}/avatar?v=${Date.now()}`;image.alt='';image.onerror=()=>image.remove();holder.append(image);
+}
 const ownRecords = new Map();
 let rejectionResolver = null;
 
@@ -71,17 +73,34 @@ async function communityRequest(url, options) {
   return data;
 }
 
+const showcaseRecords=new Map();
+function openShowcaseDetails(id){
+  const item=showcaseRecords.get(Number(id));if(!item)return;
+  const part=kind=>item.parts.find(p=>p.kind===kind);
+  const key=(item.own?'mine-':'showcase-')+item.id;
+  if(item.own)ownRecords.set(Number(item.id),item);
+  reviewData[key]={name:uiMemberName(item.member_name),initial:uiMemberName(item.member_name).slice(0,1),time:new Date(item.submitted_at).toLocaleString('zh-CN'),logic:part('logic')?.text||'未提交题解思路。',status:'approved',submissionId:item.id,memberId:item.member_id,problemTitle:item.problem_title||$('#problemHeading').textContent,problemUrl:item.problem_url||$('#problemOriginal').href,upload:part('proof')?.upload,fileName:'通过截图',blog:part('blog')?.text||'',code:part('code')?.text||''};
+  openReview(key);
+}
 function submissionCard(item, moderation = false) {
   const proof = item.parts.find(p => p.kind === 'proof');
   const logic = item.parts.find(p => p.kind === 'logic');
   const blog = item.parts.find(p => p.kind === 'blog');
+  const code = item.parts.find(p => p.kind === 'code');
+  if(!moderation){
+    showcaseRecords.set(Number(item.id),item);
+    return `<article class="solution-card solution-summary panel" data-submission="${item.id}"><div class="member-line">${memberAvatar(item.member_id,uiMemberName(item.member_name))}<div><strong>${escapeHtml(uiMemberName(item.member_name))}</strong><small>提交于 ${new Date(item.submitted_at).toLocaleString('zh-CN')}</small></div></div><section class="solution-reasoning"><h3>题解思路</h3><p>${escapeHtml(logic?.text||'暂未填写题解思路。')}</p></section><button type="button" class="secondary-button solution-detail-button" data-solution-detail="${item.id}">查看详情</button><div class="solution-actions"><button class="secondary-button ${item.liked?'is-liked':''}" data-like="${item.id}" data-liked="${item.liked}" aria-pressed="${Boolean(item.liked)}" ${item.own?'disabled':''}>赞 ${item.likes}</button>${item.can_tip?`<button class="secondary-button" data-tip="${item.id}">打赏</button>`:''}<button class="text-button" data-report="${item.id}" ${item.own||item.reported?'disabled':''}>${item.reported?'已举报':'举报'}</button>${item.can_reject?`<button class="text-button" data-direct-reject="${item.id}" data-version="${item.version}">驳回</button>`:''}</div></article>`;
+  }
   return `<article class="solution-card panel" data-submission="${item.id}">
-    <div class="member-line">${memberAvatar(item.member_id,item.member_name)}<div><strong>${escapeHtml(item.member_name)}</strong><small>${escapeHtml(item.semester_name)} · 第${item.week}周<br>归属日期：${escapeHtml(item.record_date || '')}<br>上传：${new Date(item.submitted_at).toLocaleString('zh-CN')}</small></div></div>
+    <div class="member-line">${memberAvatar(item.member_id,uiMemberName(item.member_name))}<div><strong>${escapeHtml(uiMemberName(item.member_name))}</strong><small>${escapeHtml(item.semester_name)} · 第${item.week}周<br>归属日期：${escapeHtml(item.record_date || '')}<br>上传：${new Date(item.submitted_at).toLocaleString('zh-CN')}</small></div></div>
     ${moderation ? `<h3>${escapeHtml(item.problem_title)}</h3><small>${escapeHtml(item.team_name || '')}</small><p class="muted">${item.reports} 人举报 · 版本 ${item.version}</p>` : ''}
+    <div class="solution-excerpt">
+    ${code?.text ? `<div class="shared-content blog-content"><strong>代码 · ${escapeHtml(parseSubmissionCode(code.text).language)}</strong><div class="blog-rendered" data-markdown="${escapeHtml(code.text)}"></div></div>` : ''}
     ${blog?.text ? `<div class="shared-content blog-content"><strong>Blog</strong><div class="blog-rendered" data-markdown="${escapeHtml(blog.text)}"></div></div>` : ''}
     <div class="solution-attachments">
-    ${proof?.upload ? `<button class="solution-proof" data-zoom="${escapeHtml(proof.upload)}" aria-label="放大通过截图"><img loading="lazy" src="${escapeHtml(proof.upload)}" alt="${escapeHtml(item.member_name)}的通过截图"><span>通过截图 · 点击放大</span></button>` : ''}
-    ${logic?.text ? `<div class="shared-content"><strong>写题逻辑</strong><p class="solution-text">${escapeHtml(logic.text)}</p></div>` : ''}
+    ${proof?.upload ? `<button class="solution-proof" data-zoom="${escapeHtml(proof.upload)}" aria-label="放大通过截图"><img loading="lazy" src="${escapeHtml(proof.upload)}" alt="${escapeHtml(uiMemberName(item.member_name))}的通过截图"><span>通过截图 · 点击放大</span></button>` : ''}
+    ${logic?.text ? `<div class="shared-content"><strong>题解思路</strong><p class="solution-text">${escapeHtml(logic.text)}</p></div>` : ''}
+    </div>
     </div>
     <div class="solution-actions">${moderation ? item.can_resolve ? `<button class="secondary-button" data-resolve="dismiss" data-id="${item.id}" data-version="${item.version}">驳回举报</button><button class="secondary-button" data-resolve="reject" data-id="${item.id}" data-version="${item.version}">整条退回</button>` : '<span class="muted">请其他管理员处理自己的记录</span>' : `<button class="secondary-button ${item.liked ? 'is-liked' : ''}" data-like="${item.id}" data-liked="${item.liked}" aria-pressed="${item.liked}" ${item.own ? 'disabled' : ''}>赞 ${item.likes}</button>${item.can_tip ? `<button class="secondary-button" data-tip="${item.id}">打赏</button>` : ""}<button class="text-button" data-report="${item.id}" ${item.own || item.reported ? 'disabled' : ''}>${item.reported ? '已举报' : '举报'}</button>${item.can_reject ? `<button class="text-button" data-direct-reject="${item.id}" data-version="${item.version}">驳回</button>` : ''}`}</div>
   </article>`;
@@ -93,21 +112,23 @@ async function loadShowcase(page = 1) {
   const host = $('#showcaseGrid');
   const more = $('#galleryMore');
   $('#problemBack').hidden = true;
-  $('#galleryWeekPicker').hidden = false;
-  $('#problemHeading').textContent = '本周题目';
+  $('#problemHeading').textContent = '全部周次';
   $('#problemOriginal').hidden = true;
   if (page === 1) host.innerHTML = '<div class="queue-empty">正在加载题目…</div>';
   more.hidden = true;
   host.className = 'problem-list';
   try {
-    const data = await communityRequest(`/api/showcase?page=${page}${galleryWeek ? `&week=${galleryWeek}` : ''}`);
+    const data = await communityRequest(`/api/showcase?all=1&page=${page}&q=${galleryQuery()}`);
     if (version !== galleryRequest) return;
-    galleryWeek = data.week ? String(data.week) : '';
-    const weekLabel = updateGalleryWeeks(data);
-    $('#problemHeading').textContent = data.week ? weekLabel || '题目列表' : '题目列表';
-    const html = data.problems.map(p => `<button class="problem-row panel" data-problem="${p.id}"><span><strong>${escapeHtml(p.title)}</strong><small>${p.count} 个题解：${p.members.map(escapeHtml).join('　')}</small></span><span class="problem-arrow">点击查看 →</span></button>`).join('');
-    if (page === 1) host.innerHTML = html || '<div class="queue-empty">该周暂无提交，完成第一份题解吧。</div>';
-    else host.insertAdjacentHTML('beforeend', html);
+    $('#problemHeading').textContent = '全部周次';
+    if(page===1)host.replaceChildren();
+    for(const p of data.problems){
+      let group=[...host.children].find(el=>el.dataset.week===String(p.week_id));
+      if(!group){group=document.createElement('section');group.className='showcase-week';group.dataset.week=String(p.week_id);const title=document.createElement('h2');title.textContent=p.week_label;const list=document.createElement('div');list.className='showcase-week-problems';group.append(title,list);host.append(group);}
+      const html = `<button class="problem-row panel" data-problem="${p.id}">${problemPlatformMarkup(p.url)}<span class="problem-row-content"><strong>${escapeHtml(uiProblemTitle(p.title))}</strong><small title="${escapeHtml(p.members.map(uiMemberName).join('、'))}">${p.count} 个题解 · ${p.members.slice(0,3).map(uiMemberName).map(escapeHtml).join('、')}${p.members.length>3?' 等':''}</small></span><span class="problem-arrow" aria-label="查看题目详情">›</span></button>`;
+      group.querySelector('.showcase-week-problems').insertAdjacentHTML('beforeend',html);
+    }
+    if(page===1&&!data.problems.length)host.innerHTML='<div class="queue-empty">暂无匹配的题目。</div>';
     more.hidden = !data.next;
     more.onclick = () => loadShowcase(data.next);
   } catch (error) { if (version === galleryRequest) host.innerHTML = `<div class="queue-empty">${escapeHtml(error.message)}</div>`; }
@@ -118,7 +139,7 @@ function appendSubmissionDays(host, submissions) {
   const today = new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'}).format(new Date());
   const dateFormat = new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short'});
   for (const item of submissions) {
-    const day = item.record_date;
+    const day = `${item.semester_name} · 第${item.week}周`;
     let group = groups.get(day);
     if (!group) {
       group = document.createElement('section');
@@ -126,7 +147,7 @@ function appendSubmissionDays(host, submissions) {
       group.dataset.date = day;
       const heading = document.createElement('h2');
       heading.className = 'submission-day-heading';
-      heading.textContent = `${day === today ? '今天 · ' : ''}${dateFormat.format(new Date(`${day}T12:00:00+08:00`))}`;
+      heading.textContent = day;
       const cards = document.createElement('div');
       cards.className = 'solution-waterfall';
       group.append(heading, cards);
@@ -143,16 +164,15 @@ async function openProblem(id, page = 1) {
   const host = $('#showcaseGrid');
   const more = $('#galleryMore');
   $('#problemBack').hidden = false;
-  $('#galleryWeekPicker').hidden = true;
   $('#problemOriginal').hidden = true;
   $('#problemOriginal').removeAttribute('href');
   host.className = 'submission-days';
   if (page === 1) host.innerHTML = '<div class="queue-empty">正在加载全部历史题解…</div>';
   more.hidden = true;
   try {
-    const data = await communityRequest(`/api/problems/${id}/submissions?page=${page}`);
+    const data = await communityRequest(`/api/problems/${id}/submissions?page=${page}&q=${galleryQuery()}`);
     if (version !== galleryRequest) return;
-    $('#problemHeading').textContent = data.problem.title;
+    $('#problemHeading').textContent = uiProblemTitle(data.problem.title);
     const link = $('#problemOriginal');
     link.hidden = false; link.href = data.problem.url;
     if (page === 1) host.replaceChildren();
@@ -188,10 +208,10 @@ async function loadAdminQueue({append = false, page = 1} = {}) {
 function stopAdminQueuePolling() { reportRequest++; }
 function startAdminQueuePolling() { loadWorkbench(); }
 
-function beginResubmit(id) {
+async function beginResubmit(id) {
   const record = ownRecords.get(Number(id));
   if (!record) return;
-  openModal(true);
+  if(!await openModal(true))return false;
   resubmitting = record.id;
   $('#submissionForm').dataset.weekId = record.week_id;
   $('#submissionForm').dataset.recordDate = record.record_date;
@@ -202,11 +222,14 @@ function beginResubmit(id) {
   if (typeof setBlogEditorContent === 'function' && blogPart?.text) {
     setBlogEditorContent(blogPart.text);
   }
-  $('#modalTitle').textContent = '修改并重新提交';
+  $('#modalTitle').textContent = uiProblemTitle(record.problem_title || '修改并重新提交');
+  setSubmissionCodeDraft(record.parts.find(p=>p.kind==='code')?.text||'');
+  renderSubmissionDraftBlog();
+  return true;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  $('#galleryWeek').addEventListener('change', event => { galleryWeek = event.target.value; loadShowcase(); });
+  $('#gallerySearch').addEventListener('input',()=>{clearTimeout(gallerySearchTimer);gallerySearchTimer=setTimeout(()=>galleryProblem?openProblem(galleryProblem):loadShowcase(),250);});
   $('#problemBack').addEventListener('click', () => loadShowcase());
   $('#refreshReports').addEventListener('click', () => loadWorkbench());
   $('#closeReportDecision').addEventListener('click', () => finishRejection());
@@ -224,6 +247,8 @@ document.addEventListener('keydown', event => {
 document.addEventListener('click', async event => {
   const button = event.target.closest('button');
   if (!button) return;
+  if(button.dataset.solutionDetail){openShowcaseDetails(button.dataset.solutionDetail);return;}
+  if(button.dataset.toggleSolution){const card=button.closest('.solution-card');const expanded=card.classList.toggle('is-expanded');button.setAttribute('aria-expanded',String(expanded));button.textContent=expanded?'收起题解':'展开题解';return;}
   if (button.dataset.problem) { openProblem(button.dataset.problem); return; }
   if (button.dataset.resubmit) { beginResubmit(button.dataset.resubmit); return; }
   if (button.dataset.zoom) {
@@ -277,8 +302,10 @@ function renderSubmissionBlog(element, markdown) {
       const src = node.getAttribute('src');
       const alt = node.getAttribute('alt');
       const title = node.getAttribute('title');
+      const language=node.tagName==='CODE'?(node.className.match(/(?:^|\s)language-([a-z0-9_+-]+)(?:\s|$)/i)?.[1]||'text'):null;
       for (const attr of [...node.attributes]) node.removeAttribute(attr.name);
       if (title) node.setAttribute('title', title);
+      if(language)node.className='language-'+language;
       const safeUrl = (value, image = false) => {
         if (!value || /[\u0000-\u001f\u007f]/.test(value)) return null;
         try {
@@ -295,6 +322,15 @@ function renderSubmissionBlog(element, markdown) {
       }
     });
     element.replaceChildren(template.content);
+    element.querySelectorAll('pre code').forEach(code=>{
+      window.CodeColors?.colorElement(code,code.className.replace('language-','')||'text');
+      const pre=code.parentElement,wrap=document.createElement('div');wrap.className='code-block-shell';pre.before(wrap);wrap.append(pre);
+      const button=document.createElement('button');button.type='button';button.className='code-copy-button';
+      const copyIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg>';
+      const status=(label,icon=copyIcon)=>{button.innerHTML=icon;button.setAttribute('aria-label',label);button.title=label;};status('复制代码');
+      button.onclick=async()=>{try{const text=code.textContent;if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const input=document.createElement('textarea');input.value=text;input.style.position='fixed';input.style.opacity='0';wrap.append(input);input.select();const copied=document.execCommand('copy');input.remove();if(!copied)throw Error('copy');}status('已复制','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>');setTimeout(()=>status('复制代码'),1500);}catch{status('复制失败，请重试');}};
+      wrap.append(button);
+    });
     if (typeof renderMathInElement !== 'undefined') {
       renderMathInElement(element, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false,trust:false});
     }
@@ -303,19 +339,24 @@ function renderSubmissionBlog(element, markdown) {
 
 function renderSubmissionBlogs(root) {
   root.querySelectorAll('.blog-rendered[data-markdown]').forEach(element => renderSubmissionBlog(element, element.dataset.markdown));
+  requestAnimationFrame(()=>root.querySelectorAll('.solution-card').forEach(card=>{const body=card.querySelector('.solution-excerpt'),button=card.querySelector('.solution-expand');if(body&&button&&!card.classList.contains('is-expanded'))button.hidden=body.scrollHeight<=body.clientHeight+2;}));
 }
 
-function editOwnSubmission(id) {
+async function editOwnSubmission(id) {
   const record = ownRecords.get(Number(id));
   if (!record?.can_edit) { showToast('该记录已截止或学期已归档'); return; }
+  const returnState=captureEditReturn();
   closeReview();
-  beginResubmit(id);
+  if(!await beginResubmit(id)){restoreEditReturn(returnState);return;}
+  submissionEditReturnState=returnState;
   editingSubmission = Number(id);
   resubmitting = null;
   $('#proofImage').required = false;
   $('.upload-box strong').textContent = '保留原截图，点击可更换';
   $('#proofHint').textContent = '未选择新图片时保留原截图';
-  $('#modalTitle').textContent = '编辑提交记录';
+  $('#modalTitle').textContent = uiProblemTitle(record.problem_title || '编辑提交记录');
+  $('#cancelSubmissionEdit').hidden=false;
+  $('#submissionForm button[type=submit]').textContent='修改并提交';
 }
 
 function openTipDialog(id){

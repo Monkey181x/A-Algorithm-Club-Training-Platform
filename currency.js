@@ -452,7 +452,7 @@ const CurrencyModule = (() => {
         <div>
           <p class="kicker">RBC SHOP</p>
           <h1>RBC商店</h1>
-          <p class="muted">使用RBC Coins兑换您需要的物品</p>
+
         </div>
         <div class="currency-display">
           ${currencyData.currencyIcon ? `<img src="${escape(currencyData.currencyIcon)}" alt="RBC" class="currency-icon-large" />` : '<span class="currency-icon-large">💎</span>'}
@@ -477,10 +477,12 @@ const CurrencyModule = (() => {
               <div class="shop-item-info">
                 <h3>${escape(item.name)}</h3>
                 <p>${escape(item.description)}</p>
+                ${backpack && item.status ? `<span class="fulfillment-status">${({ready:'待核销',redeemed:'已核销',dispatching:'派发中',delivered:'派送成功'})[item.status]||''}</span>` : ''}
+                ${backpack && item.code ? `<pre class="fulfillment-code"><code>${escape(item.code)}</code></pre><button class="secondary-button" type="button" data-copy-card="${item.fulfillment_id}">复制卡密</button>` : ''}
                 ${!backpack && item.stock !== -1 ? `<small class="stock-info">库存: ${item.stock}</small>` : ''}
               </div>
               <div class="shop-item-footer">
-                ${backpack ? `<span class="shop-owned-label">当前拥有</span><strong class="shop-owned-count">${item.quantity}<small> 个</small></strong>` : `
+                ${backpack ? `${item.status ? `<span class="shop-owned-label">${({ready:'待核销',redeemed:'已核销',dispatching:'派发中',delivered:'派送成功'})[item.status]}</span>` : `<span class="shop-owned-label">当前拥有</span><strong class="shop-owned-count">${item.quantity}<small> 个</small></strong>`}${item.can_redeem ? `<button class="primary-button" type="button" data-redeem-card="${item.fulfillment_id}">消耗并获取卡密</button>` : ''}` : `
                 <div class="shop-item-price">
                   <img src="${escape(coinIconSrc)}" alt="" class="shop-price-coin" aria-hidden="true" />
                   <strong>${item.price}</strong><span>RBC</span>
@@ -536,6 +538,13 @@ const CurrencyModule = (() => {
       });
     }
 
+    container.querySelectorAll('[data-redeem-card]').forEach(button=>button.onclick=async()=>{
+      if(!await clubDialog.confirm({title:'核销物品',text:'消耗1个物品并获取对应卡密，确认继续？',confirmText:'获取卡密'}))return;
+      button.disabled=true;
+      try{const response=await clubApi.request(`/api/currency/inventory/${button.dataset.redeemCard}/redeem`,{method:'POST'});const result=await response.json();if(!response.ok)throw Error(result.error||'核销失败');await renderShopView(container);}
+      catch(error){showToast(error.message);button.disabled=false;}
+    });
+    container.querySelectorAll('[data-copy-card]').forEach(button=>button.onclick=async()=>{const entry=displayItems.find(item=>String(item.fulfillment_id)===button.dataset.copyCard);try{await navigator.clipboard.writeText(entry.code);showToast('卡密已复制');}catch{showToast('复制失败，请选中卡密手动复制');}});
     // Attach purchase handlers
     container.querySelectorAll(".shop-buy-btn").forEach((btn) => {
       btn.addEventListener("click", async (e) => {

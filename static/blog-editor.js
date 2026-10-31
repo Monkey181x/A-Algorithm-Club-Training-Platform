@@ -161,11 +161,7 @@
     saveButton.addEventListener('click', saveAndClose);
 
     // 点击遮罩层关闭
-    overlay.addEventListener('click', function(e) {
-      if (e.target === overlay) {
-        closeEditor();
-      }
-    });
+
 
     // ESC 键关闭
     document.addEventListener('keydown', function(e) {

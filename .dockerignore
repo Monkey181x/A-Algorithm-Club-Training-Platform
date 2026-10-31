@@ -1,5 +1,7 @@
 .env
 .git
+.local
+.review_backups
 __pycache__
 *.pyc
 media

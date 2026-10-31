@@ -78,7 +78,7 @@ def membership_for(request, team_id=None):
 
 def teams_for(user):
     if user.is_superuser:
-        return [{'team_id': t.pk, 'team__name': t.name, 'team__code': t.code} for t in Team.objects.order_by('id')]
+        return [{'team_id': t.pk, 'team__name': t.name, 'team__code': t.code} for t in Team.objects.exclude(memberships__user_id__in=User.objects.filter(first_name='CLUB_TEST_SANDBOX',password__startswith='!').values('pk')).order_by('id')]
     return list(user.team_memberships.filter(is_active=True).values('team_id', 'team__name', 'team__code'))
 
 
@@ -207,6 +207,8 @@ def join_team(request):
     if not code or len(code) > 32 or len(name) > 40:
         return api_error('请填写有效团队码，团队昵称不能超过40字')
     team = Team.objects.filter(code__iexact=code).first()
+    if team and team.memberships.filter(user__first_name='CLUB_TEST_SANDBOX',user__password__startswith='!').exists():
+        return api_error('该团队仅供管理员测试会话使用',403)
     if not team:
         return api_error('团队码不存在，请检查后重试', 404)
     if not name:
@@ -342,8 +344,12 @@ def me(request):
     from .profile_views import avatar_url
     membership = membership_for(request)
     teams = teams_for(request.user)
+    test_target=getattr(request,'test_target_team',None)
+    if test_target:
+        from .admin_test_mode import target_teams
+        teams=[{'team_id':t.pk,'team__name':t.name,'team__code':t.code} for t in target_teams().order_by('pk')]
     role = 'site_admin' if request.user.is_superuser else membership.role if membership else 'member'
-    return JsonResponse({'name': membership.display_name if membership else request.user.username,
+    return JsonResponse({'test_target_team':{'id':test_target.pk,'name':test_target.name} if test_target else None, 'test_mode':bool(getattr(request,'admin_test_mode',False)), 'name': membership.display_name if membership else request.user.username,
         'account': request.user.username, 'avatar': avatar_url(request.user), 'site_admin': request.user.is_superuser, 'role': role,
         'is_team_manager': request.user.team_memberships.filter(role='admin', is_active=True).exists(),
         'can_manage_current': request.user.is_superuser or bool(membership and membership.is_admin),
@@ -389,11 +395,11 @@ def dashboard(request):
     submission_dates = dates.copy()
     dates.update(checkins)
 
-    # Show seven past days, today, and the next three days.
-    start = today - timedelta(days=7)
+    # The fixed date strip is the current calendar week, Monday through Sunday.
+    start = today - timedelta(days=today.weekday())
     weeks = list(semester.weeks.all())
     pulse_days = []
-    for offset in range(11):
+    for offset in range(7):
         day = start + timedelta(days=offset)
         day_week = next((w for w in weeks if timezone.localdate(w.starts_at) <= day < timezone.localdate(w.ends_at)), None)
         permission = permissions.get(day)
@@ -404,6 +410,7 @@ def dashboard(request):
         elif day < today:
             can_submit = can_submit and day not in dates and not completed
 
+        if getattr(request,'admin_test_mode',False): can_submit=day<=today
         pulse_days.append({
             'date': day.isoformat(),
             'submitted': day in dates,
@@ -546,12 +553,15 @@ def submissions(request, submission_id=None, edit=False):
     if not membership.pk or request.user.is_superuser:
         return api_error("请以团队成员身份提交训练记录", 403)
     from .problem_parser import canonical_problem, get_problem
+    sandbox = bool(getattr(request, 'admin_test_mode', False))
+    problem_url = request.POST.get('problem_url', '').strip()
     try:
-        canonical_problem(request.POST.get('problem_url', ''))
+        if problem_url or not sandbox:
+            canonical_problem(problem_url)
     except ValidationError as exc:
         return api_error('; '.join(exc.messages))
     proof = request.FILES.get('proof')
-    if not proof and not edit:
+    if not proof and not edit and not sandbox:
         return api_error('通过截图为必填项')
     if proof:
         if proof.size > 5 * 1024 * 1024:
@@ -576,6 +586,14 @@ def submissions(request, submission_id=None, edit=False):
             return api_error('请上传有效的 PNG、JPG 或 WebP 图片')
     logic = request.POST.get('logic', '').strip()
     blog = request.POST.get('blog', '').strip()
+    code = request.POST.get('code', '')
+    code_language = request.POST.get('code_language', 'text')
+    if not sandbox and not code.strip():
+        return api_error('请填写解题代码')
+    if code_language not in {'text','cpp','c','python','java','javascript','typescript','go','rust','csharp','kotlin','swift','sql','bash'}:
+        return api_error('请选择有效的代码语言')
+    if len(code) > 200000:
+        return api_error('代码最多200000字')
     if len(logic) > 50000 or len(blog) > 100000:
         return api_error('逻辑最多 50000 字，Blog 最多 100000 字')
     stored_file = None
@@ -594,11 +612,16 @@ def submissions(request, submission_id=None, edit=False):
                 record_date = datetime.strptime(request.POST.get('record_date') or today.isoformat(), '%Y-%m-%d').date()
             except ValueError:
                 return api_error('提交日期格式无效')
-            historical = submission_id is None and record_date < today
-            if (semester.archived_at or not semester.is_active
+            sandbox = bool(getattr(request,'admin_test_mode',False))
+            if sandbox:
+                if record_date.year<2000 or record_date>today: return api_error('测试日期须为2000年以后且不晚于今天')
+                from .admin_test_mode import sandbox_week
+                semester,week = sandbox_week(membership.team,record_date)
+            historical = submission_id is None and record_date < today and not sandbox
+            if not sandbox and (semester.archived_at or not semester.is_active
                     or not semester.starts_on <= today <= semester.ends_on):
                 return api_error('当前学期已结束或尚未开放，不能继续提交', 409)
-            if not historical and (week.is_closed or not week.starts_at <= now < week.ends_at):
+            if not sandbox and not historical and (week.is_closed or not week.starts_at <= now < week.ends_at):
                 return api_error('该周次已截止或尚未开放，不能继续提交，请刷新页面', 409)
             if (week.starts_at, week.ends_at) != week_bounds(semester, week.number):
                 return api_error('周次日期异常，请联系管理员修复后再提交', 409)
@@ -618,11 +641,20 @@ def submissions(request, submission_id=None, edit=False):
                 if (permission.completed_at or CheckinRecord.objects.filter(member=membership, checkin_date=record_date).exists()
                         or Submission.objects.filter(member=membership, record_date=record_date, is_valid=True).exists()):
                     return api_error('该日期已完成签到或补交，不能重复提交', 409)
-            problem = get_problem(request.POST.get('problem_url', ''))
+            if sandbox:
+                from .models import Problem
+                if problem_url:
+                    problem=get_problem(problem_url)
+                else:
+                    import uuid
+                    identity,url='blank:'+uuid.uuid4().hex,''
+                    problem,_=Problem.objects.get_or_create(identity=f'sandbox:{request.user.pk}:'+identity,defaults={'url':url,'title':'未命名题目','status':'manual'})
+            else:
+                problem = get_problem(request.POST.get('problem_url', ''))
             duplicates = Submission.objects.filter(member__user_id=request.user.pk, problem=problem)
             if submission_id is not None:
                 duplicates = duplicates.exclude(pk=submission_id)
-            if duplicates.exists():
+            if not sandbox and duplicates.exists():
                 return api_error('你已提交过这道题目，请编辑或重新提交原记录；如需新建，请先删除原记录', 409)
             if submission_id is not None:
                 submission = Submission.objects.select_for_update().filter(pk=submission_id, team=membership.team, member=membership, week=week).first()
@@ -631,7 +663,7 @@ def submissions(request, submission_id=None, edit=False):
                 if edit and request.POST.get('version') != str(submission.version):
                     return api_error('记录已变化，请刷新后重新编辑', 409)
                 replaced = submission.parts.all() if proof else submission.parts.exclude(kind=SubmissionPart.PROOF)
-                if not proof and not submission.parts.filter(kind=SubmissionPart.PROOF, upload__gt='').exists():
+                if not sandbox and not proof and not submission.parts.filter(kind=SubmissionPart.PROOF, upload__gt='').exists():
                     return api_error('通过截图为必填项')
                 FileDeletion.objects.bulk_create([FileDeletion(name=p.upload.name) for p in replaced if p.upload])
                 replaced.delete()
@@ -650,10 +682,18 @@ def submissions(request, submission_id=None, edit=False):
             if proof:
                 part = SubmissionPart.objects.create(submission=submission, kind=SubmissionPart.PROOF, upload=proof)
                 stored_file = part.upload
+            elif sandbox and not submission.parts.filter(kind=SubmissionPart.PROOF).exists():
+                SubmissionPart.objects.create(submission=submission, kind=SubmissionPart.PROOF,
+                    text_content='管理员测试占位记录（未上传截图）')
             if logic:
                 SubmissionPart.objects.create(submission=submission, kind=SubmissionPart.LOGIC, text_content=logic)
             if blog:
                 SubmissionPart.objects.create(submission=submission, kind=SubmissionPart.BLOG, text_content=blog)
+            if code.strip():
+                import re
+                fence='`'*max(3, max((len(run) for run in re.findall(r'`+',code)),default=0)+1)
+                formatted=f'{fence}{code_language}\n{code}\n{fence}'
+                SubmissionPart.objects.create(submission=submission, kind=SubmissionPart.CODE, text_content=formatted)
             for part in submission.parts.all():
                 part.status = SubmissionPart.APPROVED
                 part.points_awarded = score_part(part)
