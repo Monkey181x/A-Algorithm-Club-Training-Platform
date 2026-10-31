@@ -5,6 +5,12 @@
   let page, backdrop, data, opened = false, closing = false, poll, objectURL, allowed = false, generation = 0;
   const entry = document.getElementById('openProfile');
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let scrollState;
+  function motion(element,frames,duration){
+    if(reduced()||document.documentElement.dataset.siteMotion==='off'||!element.animate)return Promise.resolve();
+    const animation=element.animate(frames,{duration,easing:'cubic-bezier(.2,.75,.25,1)'});
+    return animation.finished.catch(()=>{});
+  }
 
   async function request(url, options = {}) {
     const response = await window.clubApi.request(url, options);
@@ -41,7 +47,7 @@
     page.innerHTML = `
       <div class="personal-top"><button id="profileBack" class="personal-back" aria-label="返回主页面" type="button"><svg class="ui-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9 5 7 7-7 7"/></svg></button><span>个人空间</span><small>PROFILE & ACCOUNTS</small></div>
       <main class="personal-content">
-        <header class="personal-heading"><p class="kicker">YOUR ALGORITHM JOURNEY</p><h1 id="personalTitle">个人信息</h1><p>整理你的个人资料，连接各个平台的训练足迹。</p></header>
+        <header class="personal-heading"><p class="kicker">YOUR ALGORITHM JOURNEY</p><h1 id="personalTitle">个人信息</h1></header>
         <p id="profileMessage" class="profile-message" role="status" aria-live="polite"></p>
         <div id="profileLoading" class="personal-loading">正在读取个人资料…</div>
         <div id="profileBody" hidden>
@@ -118,7 +124,7 @@
     const busy = binding?.status === 'pending';
     const status = !binding ? '未绑定' : busy ? '同步中' : binding.status === 'failed' ? '待重试' : '已绑定';
     card.innerHTML = `<div class="platform-card-head"><span class="platform-monogram" data-platform="${platform}">${escape(meta.short)}</span><div><h3>${escape(meta.name)}</h3><small>${escape(binding?.account || meta.hint)}</small></div><span class="platform-status ${busy ? 'pending' : binding?.status || ''}">${status}</span></div>
-      ${binding ? metrics(binding) : '<div class="platform-empty">连接账号，汇总你的比赛与做题表现</div>'}
+      ${binding ? metrics(binding) : ''}
       ${binding?.error ? `<p class="platform-error" role="status">${escape(binding.error)}${binding.synced_at ? '；以下为上次成功数据。' : ''}</p>` : ''}
       ${binding?.synced_at ? `<p class="platform-updated">上次成功同步 · ${escape(new Date(binding.synced_at).toLocaleString('zh-CN'))}</p>` : ''}
       <form class="platform-bind-form"><label for="account-${platform}">${escape(meta.hint)}</label><div><input id="account-${platform}" name="account" required maxlength="100" value="${escape(binding?.account || '')}" autocomplete="off"><button class="secondary-button" type="submit" ${busy ? 'disabled' : ''}>${binding ? '更新绑定' : '绑定账号'}</button></div></form>
@@ -172,15 +178,21 @@
     if (!page) buildPage();
     opened = true; generation++;
     if (push && location.hash !== '#profile') history.pushState({...history.state, personalPage:true}, '', '#profile');
+    const shell=document.querySelector('.app-shell');
+    scrollState={x:scrollX,y:scrollY,inert:shell.inert,styles:['position','top','left','width','overflow'].map(key=>[key,document.body.style.getPropertyValue(key),document.body.style.getPropertyPriority(key)])};
+    Object.assign(document.body.style,{position:'fixed',top:`-${scrollState.y}px`,left:`-${scrollState.x}px`,width:'100%',overflow:'hidden'});
     backdrop.hidden = false; page.hidden = false; document.querySelector('.app-shell').inert = true; document.body.classList.add('personal-open');
-    backdrop.animate([{opacity:0}, {opacity:1}], {duration:reduced() ? 0 : 320});
-    page.animate([{transform:'translateX(100%)'}, {transform:'translateX(0)'}], {duration:reduced() ? 0 : 320, easing:'cubic-bezier(.2,.75,.25,1)'});
-    page.querySelector('#profileBack').focus();
+    page.style.transform='none';page.style.opacity='1';
+    motion(backdrop,[{opacity:0},{opacity:1}],320);
+    motion(page,[{transform:'translateX(100%)'},{transform:'translateX(0)'}],320);
+    page.querySelector('#profileBack').focus({preventScroll:true});
     const version = generation;
     try {
       const result = await request('/api/profile');
       if (!opened || version !== generation) return;
       data = result;
+      page.querySelector('#personalForm').hidden=!!result.read_only;
+      page.querySelector('.personal-platform-section').hidden=!!result.read_only;
       renderGrade();
       page.querySelector('#profileLoading').hidden = true; page.querySelector('#profileBody').hidden = false;
       // Keep unsaved edits when returning to the page.
@@ -194,9 +206,13 @@
   async function close() {
     if (!opened || closing) return;
     opened = false; closing = true; generation++; clearTimeout(poll);
-    backdrop.animate([{opacity:1}, {opacity:0}], {duration:reduced() ? 0 : 260, fill:'forwards'});
-    await page.animate([{transform:'translateX(0)'}, {transform:'translateX(100%)'}], {duration:reduced() ? 0 : 260, easing:'cubic-bezier(.4,0,.8,.3)'}).finished;
-    page.hidden = true; backdrop.hidden = true; backdrop.getAnimations().forEach(animation => animation.cancel()); closing = false; document.querySelector('.app-shell').inert = false; document.body.classList.remove('personal-open'); entry.focus();
+    motion(backdrop,[{opacity:1},{opacity:0}],260);
+    await motion(page,[{transform:'translateX(0)'},{transform:'translateX(100%)'}],260);
+    page.hidden = true; backdrop.hidden = true; backdrop.getAnimations().forEach(animation => animation.cancel());page.getAnimations().forEach(animation=>animation.cancel());closing = false;
+    const state=scrollState;scrollState=null;
+    document.querySelector('.app-shell').inert = state?.inert||false; document.body.classList.remove('personal-open');
+    if(state){for(const[key,value,priority]of state.styles){if(value)document.body.style.setProperty(key,value,priority);else document.body.style.removeProperty(key);}window.scrollTo({left:state.x,top:state.y,behavior:'instant'});}
+    entry.focus({preventScroll:true});
     if (location.hash === '#profile') open(false);
   }
   function back() {
@@ -207,7 +223,7 @@
   addEventListener('popstate', () => { if (location.hash === '#profile') open(false); else close(); });
   entry?.addEventListener('click', () => open());
   window.PersonalProfile = {
-    init(me) { allowed = !me.site_admin && !!me.can_submit; entry.disabled = !allowed; updateHeader(me); if (location.hash === '#profile') open(false); },
+    init(me) { allowed = Boolean(me.account || me.name); entry.disabled = !allowed; updateHeader(me); if (location.hash === '#profile') open(false); },
     updateHeader,
   };
 })();

@@ -275,7 +275,7 @@ const CurrencyAdminModule = (() => {
                   <td>${escape(item.name)}</td>
                   <td>${item.price} RBC</td>
                   <td>${item.stock === -1 ? '无限' : item.stock}</td>
-                  <td>${item.item_type}</td>
+                  <td>${({general:'普通商品',makeup_ticket:'补签券',consumable:'消耗品',redeem_code:'核销类',physical:'实物类'})[item.item_type] || escape(item.item_type)}</td>
                   <td>${item.is_active ? '上架' : '下架'}</td>
                   <td>
                     <button type="button" class="edit-item-btn" data-item-id="${item.id}">编辑</button>
@@ -350,7 +350,14 @@ const CurrencyAdminModule = (() => {
               <option value="general" ${item?.item_type === 'general' ? 'selected' : ''}>普通商品</option>
               <option value="makeup_ticket" ${item?.item_type === 'makeup_ticket' ? 'selected' : ''}>补签券</option>
               <option value="consumable" ${item?.item_type === 'consumable' ? 'selected' : ''}>消耗品</option>
+              <option value="redeem_code" ${item?.item_type === 'redeem_code' ? 'selected' : ''}>核销类（卡密）</option>
+              <option value="physical" ${item?.item_type === 'physical' ? 'selected' : ''}>实物类</option>
             </select>
+          </div>
+          <div id="cardSourceFields" hidden>
+            <div class="form-group"><label>卡密来源</label><select id="itemCardSource"><option value="inventory" ${item?.card_source !== 'api' ? 'selected' : ''}>库存类</option><option value="api" ${item?.card_source === 'api' ? 'selected' : ''}>API 类</option></select></div>
+            <div class="form-group" id="cardStockFields"><label>追加卡密（每行一个）</label><textarea id="itemCardCodes" rows="6" autocomplete="off" placeholder="每行填写一条卡密"></textarea><small>可分配卡密：${Number(item?.available_codes || 0)}。已预留、已核销的卡密会保留；重复卡密不重复入库。</small></div>
+            <div class="form-group" id="cardApiFields"><label>API 配置（JSON）</label><textarea id="itemCardApi" rows="8" autocomplete="off" spellcheck="false" placeholder='{"url":"https://example.com/cards","method":"POST","headers":{},"body":{},"response_path":"data.code"}'></textarea><small>${item?.has_card_api ? '已有配置，留空保留。' : ''}配置会加密保存。接口需识别 Idempotency-Key 请求头，避免重试重复发卡。</small></div>
           </div>
           <div class="form-group">
             <label>
@@ -367,6 +374,8 @@ const CurrencyAdminModule = (() => {
     `;
 
     document.body.appendChild(modal);
+    const updateCardFields=()=>{const redeem=modal.querySelector('#itemType').value==='redeem_code';modal.querySelector('#cardSourceFields').hidden=!redeem;const api=modal.querySelector('#itemCardSource').value==='api';modal.querySelector('#cardStockFields').hidden=api;modal.querySelector('#cardApiFields').hidden=!api;};
+    modal.querySelector('#itemType').addEventListener('change',updateCardFields);modal.querySelector('#itemCardSource').addEventListener('change',updateCardFields);updateCardFields();
 
     // Close handlers
     modal.querySelector(".modal-close").addEventListener("click", () => modal.remove());
@@ -405,6 +414,12 @@ const CurrencyAdminModule = (() => {
         is_active: document.getElementById("itemActive").checked,
       };
 
+      if(itemData.item_type==='redeem_code'){
+        itemData.card_source=modal.querySelector('#itemCardSource').value;
+        itemData.card_codes=modal.querySelector('#itemCardCodes').value;
+        const config=modal.querySelector('#itemCardApi').value.trim();
+        if(config){try{itemData.card_api=JSON.parse(config);}catch{alert('API 配置不是有效 JSON');return;}}
+      }
       if (iconData) {
         itemData.icon = iconData;
       }

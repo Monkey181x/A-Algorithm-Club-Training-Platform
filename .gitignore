@@ -29,3 +29,12 @@ Desktop.ini
 
 # Local acceptance screenshots and temporary exports
 outputs/
+
+# Local development, database copies and review backups
+.local/
+.review_backups/
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+*.sql.gz

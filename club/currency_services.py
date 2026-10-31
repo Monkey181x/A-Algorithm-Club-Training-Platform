@@ -214,6 +214,8 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
     if item.stock != -1 and item.stock < quantity:
         raise ValueError("库存不足")
 
+    from .shop_fulfillment import reserve_codes, create_fulfillments
+    codes = reserve_codes(item, quantity)
     total_price = item.price * quantity
 
     # Deduct currency
@@ -227,7 +229,7 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
     # Create purchase record
     try:
         with transaction.atomic():
-            Purchase.objects.create(team=member.team,member=member,item=item,quantity=quantity,total_price=total_price,request_id=token)
+            purchase = Purchase.objects.create(team=member.team,member=member,item=item,quantity=quantity,total_price=total_price,request_id=token)
     except IntegrityError:
         raise ValueError('购买请求编号已被使用') from None
 
@@ -244,6 +246,7 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
         inventory.quantity += quantity
         inventory.save()
 
+    create_fulfillments(purchase, codes)
     return {"success": True, "total_price": total_price}
 
 

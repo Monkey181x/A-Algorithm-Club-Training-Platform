@@ -51,14 +51,16 @@ def ensure_current_semester(team, day=None):
 
 
 @transaction.atomic
-def align_semester(semester, day=None):
+def align_semester(semester, day=None, *, dates=None):
     """Preserve week IDs/dates and submission references while renumbering an existing term."""
     semester = Semester.objects.select_for_update().get(pk=semester.pk)
     Team.objects.select_for_update().get(pk=semester.team_id)
     if semester.archived_at or not semester.is_active:
         raise ValidationError('只能调整未归档的活动学期')
     validate_week_dates(semester)
-    start, end = semester_bounds(day or timezone.localdate())
+    start, end = dates if dates else semester_bounds(day or timezone.localdate())
+    if start > end or (end-start).days > 399:
+        raise ValidationError('学期起止日期无效，最长为400天')
     if semester.submissions.filter(record_date__lt=start).exists() or semester.submissions.filter(record_date__gt=end).exists():
         raise ValidationError('存在新学期范围外的提交，未作调整，请先检查这些记录')
     if Semester.objects.filter(team=semester.team, starts_on__lte=end, ends_on__gte=start).exclude(pk=semester.pk).exists():
@@ -81,8 +83,9 @@ def align_semester(semester, day=None):
     for week, number in mapped:
         Week.objects.filter(pk=week.pk).update(number=number)
     semester.starts_on, semester.ends_on = start, end
-    semester.calendar_managed = True
-    semester.name = semester_name(start)
+    semester.calendar_managed = dates is None
+    if dates is None:
+        semester.name = semester_name(start)
     semester.save(update_fields=['starts_on', 'ends_on', 'calendar_managed', 'name'])
     build_weeks(semester)
     refresh_totals(semester)

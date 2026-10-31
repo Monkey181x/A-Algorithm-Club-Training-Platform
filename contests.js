@@ -47,6 +47,47 @@
   const phase = c => now() < c.start ? 'upcoming' : now() < c.end ? 'running' : 'finished';
   const span = seconds => { const mins = Math.max(1, Math.ceil(seconds / 60)); return mins >= 1440 ? `${Math.floor(mins/1440)} 天 ${Math.floor(mins%1440/60)} 小时` : mins >= 60 ? `${Math.floor(mins/60)} 小时${mins%60 ? ` ${mins%60} 分` : ''}` : `${mins} 分钟`; };
 
+  // Match the schedule assistant's time lanes: equal starts share a label;
+  // intersecting time ranges form a cluster without hiding any contest.
+  function groupContestTimes(items) {
+    const sorted = [...items].sort((a,b) => a.start-b.start || a.end-b.end);
+    const groups = [];
+    for (const item of sorted) {
+      const last = groups[groups.length-1];
+      if (last && last.start === item.start) {last.items.push(item);last.end=Math.max(last.end,item.end);}
+      else groups.push({start:item.start,end:item.end,items:[item]});
+    }
+    const clusters = [];
+    let cluster = [], until = -Infinity;
+    for (const group of groups) {
+      if (cluster.length && group.start >= until) {clusters.push(cluster);cluster=[];until=-Infinity;}
+      cluster.push(group);until=Math.max(until,group.end);
+    }
+    if (cluster.length) clusters.push(cluster);
+    return clusters;
+  }
+  function contestEnd(c) {
+    return `${day(c.end)===day(c.start)?'':date(c.end,{month:'numeric',day:'numeric'})+' '}${hm(c.end)} 结束 · ${span(c.end-c.start)}`;
+  }
+  function calendarCard(c,current) {
+    const timing=tab==='upcoming'?`${span(c.start-current)}后开始`:tab==='running'?`剩余 ${span(c.end-current)}`:'已结束';
+    return `<article class="contest-card ${escape(c.platform)}"><div class="contest-card-top"><span class="contest-platform">${escape(names[c.platform])}</span><span class="contest-phase ${tab}">${timing}</span></div><h3>${escape(c.name)}</h3><div class="contest-card-bottom"><small>北京时间 · UTC+8</small><a href="${escape(c.url)}" target="_blank" rel="noopener noreferrer">${tab==='finished'?'查看比赛':'前往比赛'} <span aria-hidden="true">↗</span><span class="contest-sr">（新窗口打开）</span></a></div></article>`;
+  }
+  function renderTimelineLabels(group) {
+    const ends=[...new Set(group.items.map(c=>c.end))].sort((a,b)=>a-b);
+    return `<div class="contest-time-label"><div class="contest-start-time"><time datetime="${new Date(group.start*1000).toISOString()}">${hm(group.start)}</time><small>开始${group.items.length>1?' · '+group.items.length+' 场':''}</small></div><div class="contest-end-times">${ends.map(end=>{
+      const titles=group.items.filter(c=>c.end===end).map(c=>c.name).join('、');
+      const crossDay=day(end)!==day(group.start);
+      return `<div class="contest-end-time" title="${escape(titles)} · ${escape(day(end))} ${hm(end)} 结束"><time datetime="${new Date(end*1000).toISOString()}" aria-label="${escape(day(end))} ${hm(end)} 结束">${hm(end)}</time><small>${crossDay?date(end,{month:'numeric',day:'numeric'})+' · ':''}结束</small></div>`;
+    }).join('')}</div></div>`;
+  }
+  function renderContestTimeline(items,current) {
+    return `<div class="contest-timeline">${groupContestTimes(items).map(cluster=>`<div class="contest-time-cluster${cluster.length>1?' has-overlap':''}" style="--contest-lanes:${cluster.length}">${cluster.map(group=>{
+      const state=group.items.some(c=>current>=c.start&&current<c.end)?'running':current<group.start?'upcoming':'finished';
+      return `<div class="contest-time-lane" data-state="${state}">${renderTimelineLabels(group)}<div class="contest-time-cards">${group.items.map(c=>tab==='attended'?attendedCard(c):calendarCard(c,current)).join('')}</div></div>`;
+    }).join('')}</div>`).join('')}</div>`;
+  }
+
   function render() {
     if (!data && tab !== 'attended') return;
     const calendar = data || {contests:[],sources:[]};
@@ -79,11 +120,7 @@
     const failed = calendar.sources.every(s => s.error && !s.stale);
     el('contestResults').innerHTML = matches.length ? [...groups].map(([key,items]) => {
       const relative = key === day(current) ? '今天 · ' : key === day(current+86400) ? '明天 · ' : '';
-      return `<section class="contest-day"><h2>${relative}${date(items[0].start,{month:'long',day:'numeric',weekday:'short'})}<small>${items.length} 场</small></h2><div class="contest-grid">${items.map(c => {
-        if (tab === 'attended') return attendedCard(c);
-        const timing = tab === 'upcoming' ? `${span(c.start-current)}后开始` : tab === 'running' ? `剩余 ${span(c.end-current)}` : '已结束';
-        return `<article class="contest-card ${escape(c.platform)}"><div class="contest-card-top"><span class="contest-platform">${escape(names[c.platform])}</span><span class="contest-phase ${tab}">${timing}</span></div><h3>${escape(c.name)}</h3><div class="contest-card-time"><strong>${hm(c.start)}</strong><span>开始 · 时长 ${span(c.end-c.start)}</span></div><div class="contest-card-bottom"><small>结束于 ${date(c.end,{month:'numeric',day:'numeric'})} ${hm(c.end)}</small><a href="${escape(c.url)}" target="_blank" rel="noopener noreferrer">${tab === 'finished' ? '查看比赛' : '前往比赛'} <span aria-hidden="true">↗</span><span class="contest-sr">（新窗口打开）</span></a></div></article>`;
-      }).join('')}</div></section>`;
+      return `<section class="contest-day"><h2>${relative}${date(items[0].start,{month:'long',day:'numeric',weekday:'short'})}<small>${items.length} 场</small></h2>${renderContestTimeline(items,current)}</section>`;
     }).join('') : `<div class="contest-empty"><span aria-hidden="true">▦</span><h2>${failed ? '赛程暂时无法获取' : '暂无符合条件的比赛'}</h2><p>${failed ? '请稍后点击刷新日程重试，或直接访问各平台官网。' : '试试切换比赛状态、平台，或清空搜索条件。'}</p></div>`;
     el('contestSourceStatus').innerHTML = calendar.sources.map(s => `<span class="${s.error ? 'source-warning' : ''}" title="${escape(s.updated_at ? '上次成功更新：'+date(Date.parse(s.updated_at)/1000,{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '尚无成功更新')}">${escape(s.name)} · ${escape(s.error || '已更新')}</span>`).join('');
   }
@@ -121,7 +158,7 @@
         <button type="button" class="contest-expand" data-expand="${escape(c.id)}" aria-expanded="${open}" aria-controls="drawer-${escape(c.id)}">
           <span class="contest-card-top"><span class="contest-platform">${escape(names[c.platform])}${c.is_demo ? ' · 演示' : ''}</span><span class="contest-phase">${c.claimable_count ? c.claimable_count+' 项奖励待领取' : '已参加'}</span></span>
           <strong class="attended-title">${escape(c.name)}</strong>
-          <span class="contest-card-time"><strong>${hm(c.start)}</strong><span>开始 · 时长 ${span(c.end-c.start)}</span></span>
+          <span class="contest-card-time"><span>${contestEnd(c)}</span></span>
           <span class="contest-card-bottom"><small>${day(c.start)} · ${escape(c.account)}</small><span class="drawer-indicator">${open ? '收起题目 ∧' : '展开题目 ∨'}</span></span>
         </button>
       </div>

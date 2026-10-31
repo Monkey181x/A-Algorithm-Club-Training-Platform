@@ -55,7 +55,9 @@ def eligible(request):
 def profile(request):
     member = eligible(request)
     if not member:
-        return api_error('个人信息页仅供团队管理员与普通成员使用', 403)
+        if request.method == 'GET' and request.user.is_superuser:
+            return JsonResponse({'name': request.user.first_name or request.user.username, 'account': request.user.username, 'grade_label': '系统管理员', 'avatar': avatar_url(request.user), 'platforms': {}, 'bindings': [], 'read_only': True})
+        return api_error('请先加入团队后管理个人资料', 403)
     if request.method == 'GET':
         return JsonResponse(profile_data(request))
     if 'grade' in request.POST:

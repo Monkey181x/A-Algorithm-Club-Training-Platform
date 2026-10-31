@@ -4,7 +4,7 @@
 
 This project was born out of the need to make it easier to compile statistics on members’ training records and to encourage club members to train themselves.
 
-这是一个 Django + PostgreSQL + Celery 的团队训练平台。当前版本保留了原有前端视觉，并提供团队、学期、周次、即时计分、按题目展示、点赞举报、排行榜、成员历史和 Excel 导出接口。
+这是一个 Django + PostgreSQL + Celery 的团队训练平台，提供团队、学期、周次、即时计分、团队提交、点赞举报、排行榜、成员历史、RBC 商店和 Excel 导出接口。前端支持独立板块主题、深浅色外观和训练进展分析。
 
 ## 界面展示
 
@@ -172,3 +172,63 @@ Web 启动命令已包含迁移和 collectstatic；本地启动脚本使用项�
 时间核验兜底（2026-10-29最新要求）：有可靠AC记录但无法核验作答时间时，统一允许按对应难度档位领取；有准确时间且明确赛外的记录仍不发奖。洛谷提交时间查询失败时可使用已确认的公开AC清单兜底；无法证明AC则不发奖。此规则覆盖旧文档中“缺少时间暂不可领取”的说明。注册年级、账号绑定、比赛起始日期及去重限制继续有效。
 
 管理员工作台的完整备份、恢复及强制退出改密说明见 [系统备份与管理员密码](docs/system-backup.md)。
+
+## 外观、训练分析与提交界面
+
+设置提供带名称的柔和主题色、深浅色板、板块独立颜色与字号、圆角和动画控制。外观保存在当前浏览器，切色采用实心覆盖后圆形揭示的两段动画，并尊重减少动态效果偏好。训练总览包含固定周一至周日的日期栏、积分与提交进度、可切换统计口径的热力图，支持近四个月或按管理员设置的学期日期展示；历史日期可从热力图进入。
+
+提交、查看和编辑统一使用详情弹窗，支持截图、题解思路、代码与 Blog。普通提交要求非空代码，代码独立保存、保留缩进和语言信息，支持语法着色与复制，不编译、不执行代码，也不额外增加代码积分。Blog 可选。取消编辑恢复原详情的内容标签及滚动位置；编辑成功重新计算积分和统计。团队提交支持搜索、按学期与周次分组，题解卡片展示思路并提供完整详情入口。比赛日程以时间线显示开始与结束时间。
+
+管理员测试模式提供与真实成员视图相同的训练入口和私有排名叠加，允许测试时省略材料和放宽提交日期限制。测试成员及其数据使用独立存储空间，只对进入测试模式的管理员可见，不写入真实团队排名；测试模式不修改真实账号与团队设置。
+
+## 核销商品 API 请求格式
+
+商品设置支持库存卡密、API 卡密和实物派发，现有补签券等商品保留原有行为。库存卡密每行追加一条：购买时预留，背包核销时消耗。API 卡密购买后不会立即请求接口，用户在背包点击核销时才发起请求。实物购买后显示“派发中”，工作台生成待派发记录，管理员人工发放并确认后显示“派送成功”。
+
+管理员填写的 API 配置是 JSON 对象，例如：
+
+```json
+{
+  "url": "https://cards.example.com/issue",
+  "method": "POST",
+  "headers": {
+    "Authorization": "Bearer YOUR_TOKEN"
+  },
+  "body": {
+    "product_id": "example-product"
+  },
+  "response_path": "data.code"
+}
+```
+
+- `url`：公开的 HTTPS 地址；不允许本机或内网地址，不跟随重定向。
+- `method`：`GET` 或 `POST`，省略时为 `POST`。GET 不发送请求体；POST 将 `body` 序列化为 JSON。
+- `headers`：字符串键值对象，可放接口鉴权信息。服务端固定发送 `Content-Type: application/json` 和 `Idempotency-Key`，同名配置不能覆盖这两个值。
+- `body`：JSON 对象，内容原样发送，不替换成员信息或其他模板变量。
+- `response_path`：响应 JSON 中的卡密字段，默认 `code`；支持 `data.code` 及数组数字索引。
+
+以上配置会产生如下 POST 请求：
+
+```http
+POST /issue HTTP/1.1
+Host: cards.example.com
+Authorization: Bearer YOUR_TOKEN
+Content-Type: application/json
+Idempotency-Key: <该背包物品的固定 UUID>
+
+{"product_id":"example-product"}
+```
+
+接口应返回 HTTP 200 和 JSON，例如：
+
+```json
+{"data":{"code":"EXAMPLE-CARD-CODE"}}
+```
+
+卡密必须是非空字符串，最多 4096 字符；响应体最多 1MB，请求超时为 8 秒。接口必须支持 `Idempotency-Key`：同一物品的重复请求返回同一发卡结果，以处理接口已发卡但响应超时的情况。平台在请求失败、响应格式错误或卡密字段缺失时不消耗物品；核销成功后保存结果，重复点击和再次查看不会重新请求 API。
+
+API 配置和卡密在数据库中加密保存，商品公开列表不返回秘密配置；已核销卡密仅购买者可读取。已有配置在编辑时留空保留。完整操作与上线注意事项见 [商品核销与派发](docs/shop-fulfillment.md)。
+
+### 更新与数据兼容
+
+本次新增迁移 `0031_submission_code_part` 和 `0032_shop_fulfillment`。合并时如出现迁移编号或分支冲突，应检查依赖并处理迁移图，不直接覆盖同学新增的迁移。部署前备份数据库与媒体文件，保留原环境配置及 `DJANGO_SECRET_KEY`，依次执行迁移和静态资源更新。不要用本机数据库、账号、提交记录、媒体文件或 `.env` 替换线上数据；`.local` 和数据库备份不属于提交内容。

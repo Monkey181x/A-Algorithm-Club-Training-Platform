@@ -161,7 +161,8 @@ class SubmissionPart(models.Model):
     PROOF = "proof"
     LOGIC = "logic"
     BLOG = "blog"
-    KIND_CHOICES = [(PROOF, "通过截图"), (LOGIC, "写题逻辑"), (BLOG, "Blog")]
+    CODE = "code"
+    KIND_CHOICES = [(PROOF, "通过截图"), (LOGIC, "写题逻辑"), (BLOG, "Blog"), (CODE, "代码")]
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -450,6 +451,8 @@ class ShopItem(models.Model):
     stock = models.IntegerField(default=-1, verbose_name="库存")
     is_active = models.BooleanField(default=True, verbose_name="是否上架")
     item_type = models.CharField(max_length=50, default="general", verbose_name="商品类型")
+    card_source = models.CharField(max_length=16, default='inventory')
+    encrypted_card_api = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -497,6 +500,32 @@ class UserInventory(models.Model):
 
     def __str__(self):
         return f"{self.member.display_name} - {self.item.name} x{self.quantity}"
+
+
+class ShopFulfillment(models.Model):
+    purchase = models.ForeignKey(Purchase, on_delete=models.PROTECT, related_name='fulfillments')
+    sequence = models.PositiveIntegerField()
+    item_name = models.CharField(max_length=100)
+    status = models.CharField(max_length=16, default='ready')
+    request_key = models.UUIDField(default=uuid.uuid4, unique=True)
+    encrypted_code = models.TextField(blank=True)
+    redeemed_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    delivered_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['purchase', 'sequence'], name='unique_shop_purchase_unit')]
+
+
+class ShopCode(models.Model):
+    item = models.ForeignKey(ShopItem, on_delete=models.PROTECT, related_name='card_codes')
+    encrypted_value = models.TextField()
+    fingerprint = models.CharField(max_length=64)
+    reserved_for = models.OneToOneField(ShopFulfillment, on_delete=models.PROTECT, null=True, blank=True, related_name='reserved_code')
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['item', 'fingerprint'], name='unique_shop_code_fingerprint')]
 
 
 class UserProfile(models.Model):

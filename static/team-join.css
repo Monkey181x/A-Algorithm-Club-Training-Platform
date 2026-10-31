@@ -21,7 +21,7 @@ body.team-flow-page{display:grid;place-items:center;min-height:100dvh;margin:0;p
 .team-flow-page .auth-field{display:block;margin:0 0 22px;color:#203654;font-size:13px;font-weight:600}
 .team-flow-page .auth-field input{display:block;box-sizing:border-box;width:100%;height:46px;margin-top:9px;padding:11px 13px;border:1px solid #D5E5FB;border-radius:11px;background:#FFFFFF;color:#203654;font:inherit;box-shadow:none}
 .team-flow-page .auth-field input:focus{outline:2px solid #245EC0;outline-offset:2px}
-.team-flow-page input:-webkit-autofill{-webkit-text-fill-color:#203654;box-shadow:0 0 0 100px #FFFFFF inset}
+.team-flow-page input:-webkit-autofill{-webkit-text-fill-color:#203654;box-shadow:0 0 0 100px var(--site-shadow-highlight-1000,#FFFFFF) inset}
 .team-flow-page .primary-button{width:100%;min-height:44px;background:#245EC0!important;color:#FFFFFF!important;box-shadow:0 5px 16px #245ec018;transform:none}
 .team-flow-page .primary-button:hover:not(:disabled){background:#1C4FAD!important;transform:none}
 .team-flow-page .secondary-button,.team-flow-page .team-choice{background:#FFFFFF!important;color:#203654!important;border:1px solid #D5E5FB;transform:none}

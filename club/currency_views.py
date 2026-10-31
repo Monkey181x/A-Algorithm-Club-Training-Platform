@@ -253,6 +253,7 @@ def api_shop_items(request):
     if not member.team.currency_enabled:
         return api_error("该团队未启用货币系统", 403)
 
+    from .shop_fulfillment import available_stock
     items = ShopItem.objects.filter(team=member.team, is_active=True)
 
     data = [{
@@ -261,7 +262,7 @@ def api_shop_items(request):
         "description": item.description,
         "icon": shop_item_icon_url(item),
         "price": item.price,
-        "stock": item.stock,
+        "stock": available_stock(item),
         "item_type": item.item_type
     } for item in items]
 
@@ -324,7 +325,11 @@ def api_user_inventory(request):
         "icon": shop_item_icon_url(inv.item)
     } for inv in inventory_items]
 
-    return JsonResponse({"inventory": data})
+    from .shop_fulfillment import fulfillment_inventory
+    data.extend(fulfillment_inventory(member))
+    response=JsonResponse({"inventory": data})
+    response["Cache-Control"]="private, no-store"
+    return response
 
 
 def decode_shop_image(raw):
@@ -434,7 +439,8 @@ def api_admin_shop_items(request):
     if not request.user.is_superuser or not member:return api_error('需要管理员权限',403)
     if not member.team.currency_enabled:return api_error('该团队未启用货币系统',403)
     if request.method=='GET':
-        return JsonResponse({'items':[{'id':i.pk,'name':i.name,'description':i.description,'price':i.price,
+        from .shop_fulfillment import admin_card_data
+        return JsonResponse({'items':[{**admin_card_data(i),'id':i.pk,'name':i.name,'description':i.description,'price':i.price,
             'stock':i.stock,'is_active':i.is_active,'item_type':i.item_type,'icon':shop_item_icon_url(i)} for i in ShopItem.objects.filter(team=member.team)]})
     data=body(request)
     if request.method=='POST':item=ShopItem(team=member.team,price=1)
@@ -456,14 +462,19 @@ def api_admin_shop_items(request):
     if type(values['price']) is not int or not 1<=values['price']<=2147483647:return api_error('商品价格必须为正整数')
     if type(values['stock']) is not int or not -1<=values['stock']<=2147483647:return api_error('库存必须为-1（无限）或非负整数')
     if type(values['is_active']) is not bool:return api_error('上架状态格式无效')
-    if values['item_type'] not in ['general','makeup_ticket','consumable']:return api_error('商品类型无效')
+    if values['item_type'] not in ['general','makeup_ticket','consumable','redeem_code','physical']:return api_error('商品类型无效')
     if item.pk and values['item_type']!=item.item_type and (item.purchases.exists() or item.user_inventories.exists()):
         return api_error('已有购买或库存的商品不能更改类型，请新增商品',409)
+    from .shop_fulfillment import validate_card_settings, append_codes
+    try:card_values,codes=validate_card_settings(item,data,values['item_type'])
+    except ValueError as exc:return api_error(str(exc))
     icon=None
     if data.get('icon'):
         try:icon=decode_shop_image(data['icon'])
         except ValueError as exc:return api_error(str(exc))
     for key,value in values.items():setattr(item,key,value.strip() if key=='name' else value)
+    if card_values:
+        for key,value in card_values.items():setattr(item,key,value)
     old=item.icon.name
     if icon:item.icon=icon
     elif 'icon' in data and data['icon'] is None:item.icon=''
@@ -472,4 +483,5 @@ def api_admin_shop_items(request):
         if icon and item.icon.name and item.icon.name!=old:item.icon.storage.delete(item.icon.name)
         raise
     if old and item.icon.name!=old:FileDeletion.objects.create(name=old)
+    append_codes(item,codes)
     return JsonResponse({'success':True,'item_id':item.pk})

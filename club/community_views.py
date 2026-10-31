@@ -1,6 +1,6 @@
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count, F, Max
+from django.db.models import Count, F, Max, Q
 from django.http import JsonResponse
 from django.utils import timezone
 
@@ -28,6 +28,8 @@ def showcase(request):
     member = membership_for(request)
     if not member:
         return api_error('未加入当前团队', 403)
+    if request.GET.get('all') == '1':
+        return showcase_all(request, member)
     selected = request.GET.get('week')
     semester = active_semester(member.team)
     current_week = active_week(semester) if semester else None
@@ -42,6 +44,9 @@ def showcase(request):
     else:
         week = current_week or weeks.first()
     items = Submission.objects.filter(team=member.team, week=week, is_valid=True, semester__archived_at__isnull=True, problem__isnull=False)
+    query = request.GET.get('q', '').strip()[:200]
+    if query:
+        items = items.filter(Q(problem__title__icontains=query) | Q(problem__url__icontains=query) | Q(member__display_name__icontains=query))
     grouped = items.values('problem_id', 'problem__url', 'problem__title').annotate(count=Count('id'), latest=Max('submitted_at')).order_by('-latest', '-problem_id')
     page = page_items(request, grouped)
     if page is None:
@@ -55,6 +60,47 @@ def showcase(request):
         'weeks': [{'id': w.pk, 'label': f'{w.semester.name} · 第{w.number}周'} for w in weeks],
         'problems': [{'id': g['problem_id'], 'title': g['problem__title'] or g['problem__url'], 'url': g['problem__url'], 'count': g['count'], 'members': sorted(names.get(g['problem_id'], []))} for g in groups],
         'next': page.next_page_number() if page.has_next() else None})
+
+
+def showcase_all(request, member):
+    """All visible weeks; the sandbox adds only this administrator's records."""
+    sandbox = bool(getattr(request, 'admin_test_mode', False))
+    team = request.test_target_team if sandbox else member.team
+    scope = Q(team=team)
+    if sandbox:
+        scope |= Q(member=member)
+    items = Submission.objects.filter(scope, is_valid=True,
+        semester__archived_at__isnull=True, problem__isnull=False).select_related('week', 'semester', 'problem', 'member').order_by('-record_date', '-submitted_at', '-id')
+    real_weeks = list(Week.objects.filter(semester__team=team,
+        semester__archived_at__isnull=True).select_related('semester').order_by('-starts_at'))
+    query = request.GET.get('q', '').strip()[:200].casefold()
+    groups = {}
+    for item in items:
+        week = item.week
+        private = sandbox and item.team_id != team.pk
+        if private:
+            week = next((w for w in real_weeks if timezone.localdate(w.starts_at) <= item.record_date < timezone.localdate(w.ends_at)), None)
+            if week is None:
+                continue
+        name = '管理员' if private else item.member.display_name
+        key = (week.pk, item.problem_id)
+        row = groups.setdefault(key, {'id': item.problem_id,
+            'title': item.problem.title or item.problem.url,
+            'url': item.problem.url, 'count': 0, 'members': set(),
+            'week_id': week.pk, 'week_label': f'{week.semester.name} · 第{week.number}周',
+            '_starts': week.starts_at, '_latest': item.submitted_at})
+        row['count'] += 1
+        row['members'].add(name)
+    rows = sorted(groups.values(), key=lambda row: (row['_starts'], row['_latest'], row['id']), reverse=True)
+    if query:
+        rows = [row for row in rows if query in ' '.join([row['title'], row['url'], row['week_label'], *row['members']]).casefold()]
+    page = page_items(request, rows)
+    if page is None:
+        return api_error('页码无效')
+    result = []
+    for row in page:
+        result.append({key: sorted(value) if key == 'members' else value for key, value in row.items() if not key.startswith('_')})
+    return JsonResponse({'problems': result, 'next': page.next_page_number() if page.has_next() else None})
 
 
 def community_submission(item, viewer):
@@ -77,6 +123,9 @@ def problem_submissions(request, problem_id):
     if not items.exists():
         return api_error('该题目不存在或没有可见提交', 404)
     problem = items.first().problem
+    query = request.GET.get('q', '').strip()[:200]
+    if query:
+        items = items.filter(Q(problem__title__icontains=query) | Q(problem__url__icontains=query) | Q(member__display_name__icontains=query))
     page = page_items(request, items)
     if page is None:
         return api_error('页码无效')
@@ -178,6 +227,9 @@ def report_queue(request):
     if not request.user.is_superuser:
         items = items.filter(team=member.team)
     items = items.distinct().select_related('team', 'problem', 'member', 'week', 'semester').prefetch_related('parts').order_by('submitted_at', 'id')
+    query = request.GET.get('q', '').strip()[:200]
+    if query:
+        items = items.filter(Q(problem__title__icontains=query) | Q(problem__url__icontains=query) | Q(member__display_name__icontains=query))
     page = page_items(request, items)
     if page is None:
         return api_error('页码无效')
