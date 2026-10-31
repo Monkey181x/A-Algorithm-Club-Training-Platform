@@ -451,6 +451,7 @@ class ShopItem(models.Model):
     stock = models.IntegerField(default=-1, verbose_name="库存")
     is_active = models.BooleanField(default=True, verbose_name="是否上架")
     item_type = models.CharField(max_length=50, default="general", verbose_name="商品类型")
+    purchase_limit = models.PositiveIntegerField(default=0, verbose_name="单用户累计限购数量")
     card_source = models.CharField(max_length=16, default='inventory')
     encrypted_card_api = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

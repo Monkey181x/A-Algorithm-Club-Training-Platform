@@ -3,6 +3,7 @@ Currency system business logic
 """
 from datetime import date, timedelta
 from django.db import transaction,IntegrityError
+from django.db.models import Sum
 import uuid
 from django.utils import timezone
 
@@ -209,6 +210,12 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
         item = ShopItem.objects.select_for_update().get(pk=item_id, team=member.team, is_active=True)
     except ShopItem.DoesNotExist:
         raise ValueError("商品不存在或已下架")
+
+    # The item lock serializes purchases and limit edits before counting history.
+    if item.item_type == 'physical' and item.purchase_limit:
+        purchased = Purchase.objects.filter(item=item, member__user_id=member.user_id).aggregate(total=Sum('quantity'))['total'] or 0
+        if purchased + quantity > item.purchase_limit:
+            raise ValueError(f'已达购买上限：每人累计限购{item.purchase_limit}件，已购买{purchased}件')
 
     # Check stock
     if item.stock != -1 and item.stock < quantity:

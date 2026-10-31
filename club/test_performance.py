@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.db import connection, transaction
@@ -167,8 +168,26 @@ class QueryEfficiencyTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['stats']['streakWeeks'], current.number - 1)
-        self.assertEqual(len(payload['pulse']), 11)
-        self.assertEqual(payload['pulse'][0]['date'], (timezone.localdate()-timedelta(days=7)).isoformat())
-        self.assertEqual(payload['pulse'][-1]['date'], (timezone.localdate()+timedelta(days=3)).isoformat())
+        today = timezone.localdate()
+        start = today-timedelta(days=today.weekday()+7)
+        self.assertEqual([day['date'] for day in payload['pulse']],
+                         [(start+timedelta(days=offset)).isoformat() for offset in range(today.weekday()+8)])
+        self.assertEqual(payload['pulse'][-1]['date'], today.isoformat())
         self.assertEqual(payload['streakDays'], 0)
         self.assertTrue(all(not day['submitted'] for day in payload['pulse']))
+
+    def test_dashboard_date_strip_on_each_weekday(self):
+        current = self.semester.weeks.get(starts_at__lte=timezone.now(), ends_at__gt=timezone.now())
+        for weekday in range(7):
+            now = current.starts_at+timedelta(days=weekday, hours=12)
+            today = timezone.localdate(now)
+            start = today-timedelta(days=weekday+7)
+            with self.subTest(weekday=weekday), patch('club.views.timezone.now', return_value=now):
+                self.client.force_login(self.user)
+                response = self.client.get('/api/dashboard')
+                self.assertEqual(response.status_code, 200)
+                days = response.json()['pulse']
+                self.assertEqual([day['date'] for day in days],
+                                 [(start+timedelta(days=offset)).isoformat() for offset in range(weekday+8)])
+                self.assertTrue(days[-1]['isToday'])
+                self.assertEqual(sum(day['isToday'] for day in days), 1)

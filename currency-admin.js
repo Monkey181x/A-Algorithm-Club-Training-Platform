@@ -354,6 +354,11 @@ const CurrencyAdminModule = (() => {
               <option value="physical" ${item?.item_type === 'physical' ? 'selected' : ''}>实物类</option>
             </select>
           </div>
+          <div class="form-group" id="itemPurchaseLimitField" hidden>
+            <label for="itemPurchaseLimit">限购数量</label>
+            <input type="number" id="itemPurchaseLimit" min="0" max="2147483647" step="1" value="${Number(item?.purchase_limit || 0)}" aria-describedby="itemPurchaseLimitHint" />
+            <small id="itemPurchaseLimitHint">每个账号累计可购买的件数，0 表示不限购。已购买、已派送的数量均计入。</small>
+          </div>
           <div id="cardSourceFields" hidden>
             <div class="form-group"><label>卡密来源</label><select id="itemCardSource"><option value="inventory" ${item?.card_source !== 'api' ? 'selected' : ''}>库存类</option><option value="api" ${item?.card_source === 'api' ? 'selected' : ''}>API 类</option></select></div>
             <div class="form-group" id="cardStockFields"><label>追加卡密（每行一个）</label><textarea id="itemCardCodes" rows="6" autocomplete="off" placeholder="每行填写一条卡密"></textarea><small>可分配卡密：${Number(item?.available_codes || 0)}。已预留、已核销的卡密会保留；重复卡密不重复入库。</small></div>
@@ -374,6 +379,8 @@ const CurrencyAdminModule = (() => {
     `;
 
     document.body.appendChild(modal);
+    const updateLimitField=()=>{modal.querySelector('#itemPurchaseLimitField').hidden=modal.querySelector('#itemType').value!=='physical';};
+    modal.querySelector('#itemType').addEventListener('change',updateLimitField);updateLimitField();
     const updateCardFields=()=>{const redeem=modal.querySelector('#itemType').value==='redeem_code';modal.querySelector('#cardSourceFields').hidden=!redeem;const api=modal.querySelector('#itemCardSource').value==='api';modal.querySelector('#cardStockFields').hidden=api;modal.querySelector('#cardApiFields').hidden=!api;};
     modal.querySelector('#itemType').addEventListener('change',updateCardFields);modal.querySelector('#itemCardSource').addEventListener('change',updateCardFields);updateCardFields();
 
@@ -411,9 +418,11 @@ const CurrencyAdminModule = (() => {
         price: parseInt(document.getElementById("itemPrice").value),
         stock: parseInt(document.getElementById("itemStock").value),
         item_type: document.getElementById("itemType").value,
+        purchase_limit: document.getElementById('itemType').value==='physical' ? Number(document.getElementById('itemPurchaseLimit').value) : 0,
         is_active: document.getElementById("itemActive").checked,
       };
 
+      if(!Number.isInteger(itemData.purchase_limit)||itemData.purchase_limit<0||itemData.purchase_limit>2147483647){alert('限购数量必须为0（不限购）或正整数');return;}
       if(itemData.item_type==='redeem_code'){
         itemData.card_source=modal.querySelector('#itemCardSource').value;
         itemData.card_codes=modal.querySelector('#itemCardCodes').value;

@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -12,6 +13,18 @@ from django.test import TestCase
 
 class SemesterSettingsTests(TestCase):
     setUp=fixtures.CommunityTests.setUp
+
+    def test_history_weeks_only_include_weeks_that_have_started(self):
+        weeks = list(self.semester.weeks.order_by('number'))
+        for now in (weeks[0].starts_at-timedelta(microseconds=1),
+                    self.week.starts_at-timedelta(microseconds=1), self.week.starts_at,
+                    weeks[-1].ends_at+timedelta(days=1)):
+            with self.subTest(now=now), patch('club.views.timezone.now', return_value=now):
+                self.client.force_login(self.author)
+                response = self.client.get('/api/semesters')
+            self.assertEqual(response.status_code, 200)
+            semester = next(item for item in response.json()['semesters'] if item['id'] == self.semester.pk)
+            self.assertEqual(semester['weeks'], [week.number for week in weeks if week.starts_at <= now])
 
     def settings(self):
         self.client.force_login(User.objects.get(username='admin'))

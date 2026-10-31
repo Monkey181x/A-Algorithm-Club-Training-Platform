@@ -259,6 +259,19 @@ function setView(view, {preserveContent=false}={}) {
   if (view === 'extensions') window.ExtensionResources.load();
 }
 
+function updateSubmissionEntry(entry, day, date) {
+  if (!entry || !day) return;
+  const isFuture = date > pulseToday;
+  const historical = date < pulseToday;
+  const label = isFuture ? '暂未开放' : historical && day.isMakeup ? '当日已补签'
+    : historical && day.submitted ? '当日已签到' : historical ? '补交当日记录' : day.submitted || day.hasSubmission ? '继续提交' : '提交今日记录';
+  const disabled = adminTestMode ? isFuture : isFuture || !day.canSubmit || historical && (day.submitted || day.isMakeup);
+  entry.innerHTML = `<span>＋</span>${adminTestMode&&!isFuture?(historical?'补交当日记录':day.submitted||day.hasSubmission?'继续提交':'提交今日记录'):label}`;
+  entry.disabled = Boolean(disabled);
+  entry.classList.toggle('disabled', Boolean(disabled));
+  entry.classList.toggle('is-makeup-complete', historical && day.isMakeup);
+}
+
 function selectPulseDay(date) {
   const day = pulseDays.find(item => item.date === date);
   if (!day) return;
@@ -271,19 +284,8 @@ function selectPulseDay(date) {
     button.setAttribute('aria-selected', String(selected));
   });
   $('#pulseFocus').textContent = `${date} · ${day.isMakeup ? '已补签' : day.makeupOpen ? '已开放补交，待提交' : day.checkedIn && !day.hasSubmission ? '已签到' : day.submitted ? '已有有效提交' : '尚未提交'}`;
-  const button = $('#openSubmission');
-  const secondaryButton = $('#openSubmissionSecondary');
-  const isFuture = date > pulseToday;
-  const historical = date < pulseToday;
-  const label = isFuture ? '暂未开放' : historical && day.isMakeup ? '当日已补签'
-    : historical && day.submitted ? '当日已签到' : historical ? '补交当日记录' : day.submitted || day.hasSubmission ? '继续提交' : '提交今日记录';
-  const disabled = adminTestMode ? isFuture : isFuture || !day.canSubmit || historical && (day.submitted || day.isMakeup);
-  for (const entry of [button, secondaryButton].filter(Boolean)) {
-    entry.innerHTML = `<span>＋</span>${adminTestMode&&!isFuture?(historical?'补交当日记录':day.submitted||day.hasSubmission?'继续提交':'提交今日记录'):label}`;
-    entry.disabled = Boolean(disabled);
-    entry.classList.toggle('disabled', Boolean(disabled));
-    entry.classList.toggle('is-makeup-complete', historical && day.isMakeup);
-  }
+  updateSubmissionEntry($('#openSubmission'), day, date);
+  updateSubmissionEntry($('#openSubmissionSecondary'), pulseDays.find(item => item.date === pulseToday), pulseToday);
   renderActivityDay(day);
   if(activityPayload&&(date<activityPayload.start||date>activityPayload.end)){
     $('#activityRange').value='month';$('#activityMonth').value=date.slice(0,7);loadTrainingActivity();
@@ -294,9 +296,91 @@ function wirePulseAtlas() {
   const track = $('.pulse-track');
   if (!track || track.dataset.wired) return;
   track.dataset.wired = 'true';
+  let drag = null, frame = 0, suppressClick = false, settleTimer = 0, settling = false;
+  const snap = () => {
+    clearTimeout(settleTimer);
+    if (drag?.active || !track.clientWidth) return;
+    const items = [...track.querySelectorAll('[data-pulse-date]')];
+    const origin = items[0]?.offsetLeft || 0;
+    // Align the partially visible first date, without selecting a different date.
+    const first = items.filter(item => item.offsetLeft-origin <= track.scrollLeft+1).at(-1);
+    if (!first) return;
+    const left = Math.min(first.offsetLeft-origin, track.scrollWidth-track.clientWidth);
+    if (Math.abs(left-track.scrollLeft) < 1) return;
+    settling = true;
+    track.scrollTo({left, behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+    settleTimer = setTimeout(() => { settling = false; }, 500);
+  };
+  const paint = () => {
+    frame = 0;
+    if (drag?.active) track.scrollLeft = drag.scrollLeft+drag.x-drag.latestX;
+  };
+  const finish = event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    cancelAnimationFrame(frame); frame = 0;
+    const state = drag;
+    if (state.active) {
+      paint();
+      suppressClick = true;
+      event.preventDefault();
+    }
+    drag = null;
+    track.classList.remove('is-dragging');
+    if (track.hasPointerCapture(state.id)) track.releasePointerCapture(state.id);
+    if (state.active) snap();
+  };
+  track.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.isPrimary === false || drag) return;
+    clearTimeout(settleTimer); settling = false; suppressClick = false;
+    track.scrollTo({left:track.scrollLeft,behavior:'instant'});
+    drag = {id:event.pointerId,x:event.clientX,y:event.clientY,latestX:event.clientX,scrollLeft:track.scrollLeft,active:false};
+  });
+  track.addEventListener('pointermove', event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const distance = Math.abs(event.clientX-drag.x), cross = Math.abs(event.clientY-drag.y);
+    if (!drag.active) {
+      if (cross > 6 && cross > distance) { drag = null; return; }
+      if (distance < 6) return;
+      drag.active = true;
+      track.classList.add('is-dragging');
+      track.setPointerCapture(drag.id);
+    }
+    event.preventDefault();
+    drag.latestX = event.clientX;
+    if (!frame) frame = requestAnimationFrame(paint);
+  }, {passive:false});
+  track.addEventListener('pointerup', finish);
+  track.addEventListener('pointercancel', finish);
+  track.addEventListener('lostpointercapture', event => {if (event.target === track) finish(event);});
+  track.addEventListener('scroll', () => {
+    if (drag?.active || settling) return;
+    clearTimeout(settleTimer); settleTimer = setTimeout(snap,120);
+  }, {passive:true});
+  new ResizeObserver(() => {
+    if (!track.clientWidth) return;
+    if (track.dataset.resetScroll) {
+      track.scrollLeft = track.scrollWidth-track.clientWidth;
+      delete track.dataset.resetScroll;
+    } else snap();
+  }).observe(track);
   track.addEventListener('click', event => {
+    if (suppressClick) {
+      suppressClick = false;
+      if (event.detail > 0) {event.preventDefault();event.stopImmediatePropagation();return;}
+    }
     const day = event.target.closest('[data-pulse-date]');
     if (day) selectPulseDay(day.dataset.pulseDate);
+  });
+  track.addEventListener('keydown', event => {
+    if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+    const items = [...track.querySelectorAll('[data-pulse-date]')];
+    const current = items.indexOf(event.target);
+    if (current < 0) return;
+    event.preventDefault();
+    const next = event.key==='Home'?0:event.key==='End'?items.length-1:Math.max(0,Math.min(items.length-1,current+(event.key==='ArrowRight'?1:-1)));
+    items[next].focus({preventScroll:true});
+    items[next].click();
+    items[next].scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
   });
 }
 
@@ -355,7 +439,11 @@ function renderPulseDays(dashboard) {
   if(selectedHistory&&!pulseDays.some(day=>day.date===selectedHistory.date))pulseDays.push(selectedHistory);
   pulseToday = dashboard.today;
   if (!track || !pulseDays.length) return;
-  track.style.setProperty('--pulse-days', '7');
+  const rangeKey = `${weekDays[0]?.date}/${weekDays.at(-1)?.date}`;
+  const resetScroll = track.dataset.rangeKey !== rangeKey;
+  track.dataset.rangeKey = rangeKey;
+  if (resetScroll) track.dataset.resetScroll = 'true';
+  track.style.setProperty('--pulse-days', String(weekDays.length));
   track.innerHTML = weekDays.map(day => `<button class="pulse-week ${day.submitted ? 'is-complete' : ''} ${day.makeupOpen ? 'is-unlocked' : ''} ${day.isToday ? 'is-current' : ''}" data-pulse-date="${day.date}" type="button" role="tab" aria-selected="false" aria-label="${day.date} ${day.isMakeup ? '已补签' : day.makeupOpen ? '已开放补交，待提交' : day.checkedIn && !day.hasSubmission ? '已签到' : day.submitted ? '已提交' : '未提交'}"><small>${['周日','周一','周二','周三','周四','周五','周六'][new Date(day.date+'T12:00:00').getDay()]}</small><span>${day.isToday ? '今' : day.date.slice(-2)}</span><i aria-hidden="true"></i></button>`).join('');
   const streakDays = Math.max(0, Math.trunc(Number(dashboard.streakDays) || 0));
   if ($('#streakValue')) $('#streakValue').innerHTML = `${streakDays} <small>天</small>`;
@@ -364,6 +452,11 @@ function renderPulseDays(dashboard) {
   const todayIndex = pulseDays.findIndex(day => day.date === pulseToday);
   const defaultDate = pulseDays.some(day => day.date === selectedPulseDate) ? selectedPulseDate : pulseDays.find(day => day.isToday)?.date || pulseDays[todayIndex >= 0 ? todayIndex : Math.floor(pulseDays.length / 2)].date;
   selectPulseDay(defaultDate);
+  if (resetScroll) requestAnimationFrame(() => {
+    if (!track.clientWidth) return;
+    track.scrollLeft = track.scrollWidth-track.clientWidth;
+    delete track.dataset.resetScroll;
+  });
 }
 
 function applyLiveDashboardState(dashboard, submissions = []) {
@@ -623,7 +716,7 @@ let makeupInFlight = false;
 async function completeMakeup(date) {
   if (makeupInFlight) return null;
   makeupInFlight = true;
-  const buttons = ['openSubmission', 'openSubmissionSecondary'].map(id => $('#'+id)).filter(Boolean);
+  const buttons = ['openSubmission'].map(id => $('#'+id)).filter(Boolean);
   buttons.forEach(button => button.disabled = true);
   try {
     const alreadyOpen = pulseDays.find(day => day.date === date)?.makeupOpen === true;
@@ -691,7 +784,8 @@ function closeModal(){
 $$('.nav-item[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
 wirePulseAtlas();
 $$('[data-view-target]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.viewTarget)));
-['openSubmission','openSubmissionSecondary','emptyAction'].forEach((id) => { const button = $(`#${id}`); if (button) button.addEventListener('click', openModal); });
+$('#openSubmission')?.addEventListener('click', () => openModal());
+['openSubmissionSecondary','emptyAction'].forEach((id) => { const button = $(`#${id}`); if (button) button.addEventListener('click', () => openModal(true)); });
 $('#closeSubmission').addEventListener('click',()=>editingSubmission?cancelSubmissionEdit():closeModal());
 $('#cancelSubmissionEdit').addEventListener('click',cancelSubmissionEdit);
 
@@ -1275,9 +1369,9 @@ async function openLiveMemberHistory(memberId) {
     const selected = semesterSelect.value;
     updateHistorySelect(semesterSelect, semesterList.map(item => ({value:String(item.id),text:`${item.name}${item.archived ? '（已归档）' : ''}`})), selected);
     const semester = semesterList.find(item => String(item.id) === semesterSelect.value);
-    if (semester && semesterSelect.dataset.weeksFor !== String(semester.id)) {
+    if (semester) {
       const previousWeek = $('#historyWeek').value;
-      updateHistorySelect($('#historyWeek'), semester.weeks.map(number => ({value:String(number),text:`第 ${number} 周`})), previousWeek);
+      updateHistorySelect($('#historyWeek'), [...semester.weeks].sort((a,b) => b-a).map(number => ({value:String(number),text:`第 ${number} 周`})), previousWeek);
       semesterSelect.dataset.weeksFor = String(semester.id);
     }
     const week = $('#historyWeek').value;
