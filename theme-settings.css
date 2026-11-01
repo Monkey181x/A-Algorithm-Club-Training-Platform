@@ -380,7 +380,7 @@ html[data-heatmap-month-gap="false"] #activityHeatmap .activity-month-sections{g
 #dashboardView .training-metrics .score-progress-dots{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:6px;margin:12px 0 0;}
 #dashboardView .training-metrics .score-progress-dots i{display:block;flex:none;width:6px;height:6px;border-radius:50%;background:color-mix(in srgb,var(--site-accent,var(--teal)) 18%,var(--site-fill,var(--panel)));}
 #dashboardView .training-metrics .score-progress-dots i.done{background:var(--site-accent,var(--teal))!important;}
-#dashboardView .training-activity .pulse-track{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:none;scroll-behavior:auto;touch-action:pan-y;overscroll-behavior-x:contain;cursor:grab;}
+#dashboardView .training-activity .pulse-track{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:none;scroll-behavior:auto;touch-action:pan-x pan-y pinch-zoom;overscroll-behavior-x:contain;cursor:grab;}
 #dashboardView .training-activity .pulse-track.is-dragging{cursor:grabbing;}
 #dashboardView .training-activity .pulse-track .pulse-week{flex:0 0 calc((100% - 18px)/7);min-width:0;width:auto;padding-left:2px;padding-right:2px;scroll-snap-align:none;cursor:inherit;}
 #submissionTargetDate{font-size:12px;line-height:1.6;color:var(--site-secondary,var(--muted));font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}

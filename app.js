@@ -297,9 +297,16 @@ function wirePulseAtlas() {
   if (!track || track.dataset.wired) return;
   track.dataset.wired = 'true';
   let drag = null, frame = 0, suppressClick = false, settleTimer = 0, settling = false;
+  let touch = null;
+  const contacts = new Set();
+  const scheduleSnap = () => {
+    if (settling) return;
+    clearTimeout(settleTimer);
+    if (!contacts.size && !drag) settleTimer = setTimeout(snap, 200);
+  };
   const snap = () => {
     clearTimeout(settleTimer);
-    if (drag?.active || !track.clientWidth) return;
+    if (contacts.size || drag || !track.clientWidth) return;
     const items = [...track.querySelectorAll('[data-pulse-date]')];
     const origin = items[0]?.offsetLeft || 0;
     // Align the partially visible first date, without selecting a different date.
@@ -327,9 +334,32 @@ function wirePulseAtlas() {
     drag = null;
     track.classList.remove('is-dragging');
     if (track.hasPointerCapture(state.id)) track.releasePointerCapture(state.id);
-    if (state.active) snap();
+    if (state.active) {
+      if (event.type === 'pointerup') snap();
+      else scheduleSnap();
+    }
   };
+  // Touch scrolling belongs to the browser, including momentum and direction locking.
+  // A pointercancel during native panning does not mean the finger has lifted.
+  track.addEventListener('touchstart', event => {
+    clearTimeout(settleTimer); settling = false; suppressClick = false;
+    track.scrollTo({left:track.scrollLeft,behavior:'instant'});
+    for (const contact of event.changedTouches) contacts.add(contact.identifier);
+    const first = event.touches[0];
+    touch = first ? {id:first.identifier,x:first.clientX,y:first.clientY} : null;
+  }, {passive:true});
+  track.addEventListener('touchmove', event => {
+    const current = [...event.touches].find(contact => contact.identifier === touch?.id);
+    if (current && Math.hypot(current.clientX-touch.x,current.clientY-touch.y) > 6) suppressClick = true;
+  }, {passive:true});
+  const finishTouch = event => {
+    for (const contact of event.changedTouches) contacts.delete(contact.identifier);
+    if (!contacts.size) { touch = null; scheduleSnap(); }
+  };
+  track.addEventListener('touchend', finishTouch, {passive:true});
+  track.addEventListener('touchcancel', finishTouch, {passive:true});
   track.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'touch') return;
     if (event.button !== 0 || event.isPrimary === false || drag) return;
     clearTimeout(settleTimer); settling = false; suppressClick = false;
     track.scrollTo({left:track.scrollLeft,behavior:'instant'});
@@ -353,8 +383,10 @@ function wirePulseAtlas() {
   track.addEventListener('pointercancel', finish);
   track.addEventListener('lostpointercapture', event => {if (event.target === track) finish(event);});
   track.addEventListener('scroll', () => {
-    if (drag?.active || settling) return;
-    clearTimeout(settleTimer); settleTimer = setTimeout(snap,120);
+    scheduleSnap();
+  }, {passive:true});
+  track.addEventListener('scrollend', () => {
+    if (!settling) snap();
   }, {passive:true});
   new ResizeObserver(() => {
     if (!track.clientWidth) return;
