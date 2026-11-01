@@ -18,7 +18,7 @@
   border-radius: 20px;
   cursor: pointer;
   font-size: 14px;
-  transition: all 0.2s;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
 .currency-button:hover {

@@ -104,8 +104,10 @@ function renderActivityDay(day) {
   const metric=$('#activityMetric').value,record=activityPayload?.days.find(d=>d.date===day.date);
   const rows=(record?.records||[]).filter(r=>r.kind===metric);
   const count=record?.[metric]||0;
+  const dateLabel=day.date===pulseToday?'今日':'当日';
+  const hasSubmission=Boolean(record?.hasSubmission||record?.daily>0);
   $('#pulseFocus').textContent=`${day.date} · ${metric==='ac'?'AC 题目':'每日一题提交'} ${count} ${activityUnit()}`;
-  container.innerHTML=rows.length?rows.map((r,index)=>{const url=activitySafeLink(r.url);return `<div class="activity-record"><div><small>第${index+1}题</small>${url?`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(uiProblemTitle(r.title))} <span aria-hidden="true">↗</span></a>`:`<strong>${escapeHtml(uiProblemTitle(r.title))}</strong>`}</div><span class="activity-record-check" aria-label="已记录">✓</span></div>`;}).join(''):`<p class="activity-empty">${day.date>pulseToday?'这一天还未到来。':!activityPayload?'正在加载当天记录…':(record?.daily||day.hasSubmission)?'今日已有提交，暂无已确认的 AC 记录。':day.date===pulseToday?'今日没有提交':'当日没有提交'}${day.checkedIn&&!day.hasSubmission?' 已签到，尚未提交题目。':''}</p>`;
+  container.innerHTML=rows.length?rows.map((r,index)=>{const url=activitySafeLink(r.url);return `<div class="activity-record"><div><small>第${index+1}题</small>${url?`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(uiProblemTitle(r.title))} <span aria-hidden="true">↗</span></a>`:`<strong>${escapeHtml(uiProblemTitle(r.title))}</strong>`}</div><span class="activity-record-check" aria-label="已记录">✓</span></div>`;}).join(''):`<p class="activity-empty">${day.date>pulseToday?'这一天还未到来。':!record?'正在加载当天记录…':metric==='ac'&&hasSubmission?`${dateLabel}已有提交，暂无已确认的 AC 记录。`:`${dateLabel}没有提交`}${record?.checkedIn&&!hasSubmission?' 已签到，尚未提交题目。':''}</p>`;
   const submit=$('#activitySubmit'),primary=$('#openSubmission');
   submit.hidden=!primary||primary.hidden||document.body.classList.contains('site-admin-mode');
   submit.disabled=false;submit.textContent='查看历史提交';
@@ -150,6 +152,7 @@ function renderTrainingActivity(){
   $('#activityMonthLabel').hidden=semester;
   $('#activityHeatmap').dataset.range=semester?'semester':'month';
   $('#activityHeatmap').innerHTML=`<div class="activity-weekdays" aria-hidden="true">${['一','二','三','四','五','六','日'].map(n=>`<span>${n}</span>`).join('')}</div>${renderActivityMonths(data.days,metric,unit,data.today)}`;
+  wireActivityHeatScroll();
   $('#activityNote').hidden=true;
   $('#activityNote').textContent='';
   const day=data.days.find(d=>d.date===selectedPulseDate)||data.days.find(d=>d.isToday)||[...data.days].reverse().find(d=>d.date<=data.today)||data.days[0];
@@ -292,10 +295,9 @@ function selectPulseDay(date) {
   }
 }
 
-function wirePulseAtlas() {
-  const track = $('.pulse-track');
-  if (!track || track.dataset.wired) return;
-  track.dataset.wired = 'true';
+function wireHorizontalDateScroll(track, itemSelector) {
+  if (!track || track.dataset.scrollWired) return;
+  track.dataset.scrollWired = 'true';
   let drag = null, frame = 0, suppressClick = false, settleTimer = 0, settling = false;
   let touch = null;
   const contacts = new Set();
@@ -305,14 +307,18 @@ function wirePulseAtlas() {
     if (!contacts.size && !drag) settleTimer = setTimeout(snap, 200);
   };
   const snap = () => {
+    if (settling || contacts.size || drag || !track.clientWidth) return;
     clearTimeout(settleTimer);
-    if (contacts.size || drag || !track.clientWidth) return;
-    const items = [...track.querySelectorAll('[data-pulse-date]')];
-    const origin = items[0]?.offsetLeft || 0;
-    // Align the partially visible first date, without selecting a different date.
-    const first = items.filter(item => item.offsetLeft-origin <= track.scrollLeft+1).at(-1);
-    if (!first) return;
-    const left = Math.min(first.offsetLeft-origin, track.scrollWidth-track.clientWidth);
+    const maxLeft = track.scrollWidth-track.clientWidth;
+    // Keep the right edge reachable when the final month is narrower than the viewport.
+    if (track.scrollLeft >= maxLeft-1) return;
+    const items = [...track.querySelectorAll(itemSelector)];
+    const origin = items[0]?.getBoundingClientRect().left || 0;
+    const stops = items.map(item => item.getBoundingClientRect().left-origin);
+    // Align the first partially visible date/month without changing the selection.
+    const first = stops.filter(left => left <= track.scrollLeft+1).at(-1);
+    if (first === undefined) return;
+    const left = Math.min(first, maxLeft);
     if (Math.abs(left-track.scrollLeft) < 1) return;
     settling = true;
     track.scrollTo({left, behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
@@ -359,7 +365,7 @@ function wirePulseAtlas() {
   track.addEventListener('touchend', finishTouch, {passive:true});
   track.addEventListener('touchcancel', finishTouch, {passive:true});
   track.addEventListener('pointerdown', event => {
-    if (event.pointerType === 'touch') return;
+    if (event.pointerType === 'touch' || track.scrollWidth <= track.clientWidth+1) return;
     if (event.button !== 0 || event.isPrimary === false || drag) return;
     clearTimeout(settleTimer); settling = false; suppressClick = false;
     track.scrollTo({left:track.scrollLeft,behavior:'instant'});
@@ -388,18 +394,38 @@ function wirePulseAtlas() {
   track.addEventListener('scrollend', () => {
     if (!settling) snap();
   }, {passive:true});
-  new ResizeObserver(() => {
+  const refresh = () => {
+    track.classList.toggle('is-scrollable',track.scrollWidth > track.clientWidth+1);
     if (!track.clientWidth) return;
     if (track.dataset.resetScroll) {
       track.scrollLeft = track.scrollWidth-track.clientWidth;
       delete track.dataset.resetScroll;
     } else snap();
-  }).observe(track);
+  };
+  new ResizeObserver(refresh).observe(track);
   track.addEventListener('click', event => {
     if (suppressClick) {
       suppressClick = false;
       if (event.detail > 0) {event.preventDefault();event.stopImmediatePropagation();return;}
     }
+  }, {capture:true});
+  return refresh;
+}
+
+let refreshActivityHeatScroll;
+function wireActivityHeatScroll() {
+  if (!refreshActivityHeatScroll) {
+    refreshActivityHeatScroll = wireHorizontalDateScroll($('.activity-heat-scroll'),'.activity-month-section, .activity-continuous-months [data-activity-date]');
+  }
+  requestAnimationFrame(() => refreshActivityHeatScroll?.());
+}
+
+function wirePulseAtlas() {
+  const track = $('.pulse-track');
+  if (!track || track.dataset.wired) return;
+  track.dataset.wired = 'true';
+  wireHorizontalDateScroll(track,'[data-pulse-date]');
+  track.addEventListener('click', event => {
     const day = event.target.closest('[data-pulse-date]');
     if (day) selectPulseDay(day.dataset.pulseDate);
   });

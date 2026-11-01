@@ -90,8 +90,16 @@
     for(const[k,v]of Object.entries(properties))setComponentVar(el,'--site-'+k,v);
   }
 
+  function cancelFontTransitions(el){
+    // Measuring an in-flight font-size transition reads the previous scaled size.
+    // Cancel only that transition so colors, hover effects and other motion continue.
+    for(const animation of el.getAnimations?.()||[]){
+      if(animation.transitionProperty==='font-size')animation.cancel();
+    }
+  }
   function scaleText(){
     for(const[el,record]of fontStyles){if(!el.isConnected){fontStyles.delete(el);continue;}if(record.value)el.style.setProperty('font-size',record.value,record.priority);else el.style.removeProperty('font-size');}
+    for(const el of fontStyles.keys())cancelFontTransitions(el);
     if(settings.uiScale===1&&settings.cardScale===1&&!Object.values(settings.blocks[mode()]).some(b=>b.enabled&&b.scale!==1))return;
     const pending=[];
     for(const el of document.querySelectorAll('body *')){
@@ -104,6 +112,7 @@
       pending.push([el,parseFloat(getComputedStyle(el).fontSize)*factor]);
     }
     for(const[el,size]of pending)el.style.setProperty('font-size',size+'px','important');
+    for(const[el]of pending)cancelFontTransitions(el);
   }
   function apply(){
     const heatmapLayoutChanged=root.dataset.heatmapMonthGap!==String(settings.heatmapMonthGap);

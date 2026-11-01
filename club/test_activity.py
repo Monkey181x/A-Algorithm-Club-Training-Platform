@@ -66,6 +66,33 @@ class TrainingActivityTests(TestCase):
         self.assertEqual(data['daily']['total'], 1)
         self.assertEqual(data['daily']['streak'], 1)
 
+    def test_empty_invalid_and_checkin_only_days_are_not_submissions(self):
+        today = timezone.localdate()
+        self.record(day=today-timedelta(days=1), valid=False)
+        CheckinRecord.objects.create(team=self.team, member=self.author_member,
+            checkin_date=today-timedelta(days=2))
+        response = self.client.get('/api/training-activity', {
+            'start': (today-timedelta(days=3)).isoformat(),
+            'end': (today+timedelta(days=1)).isoformat()})
+        self.assertEqual(response.status_code, 200)
+        days = response.json()['days']
+        for day in days:
+            with self.subTest(date=day['date']):
+                self.assertEqual(day['daily'], 0)
+                self.assertFalse(day['hasSubmission'])
+                self.assertEqual(day['submitted'], day['checkedIn'])
+        self.assertTrue(days[1]['checkedIn'])
+
+    def test_pending_submission_is_flagged_only_on_its_record_date(self):
+        today = timezone.localdate()
+        self.record(day=today-timedelta(days=1), approved=False)
+        response = self.client.get('/api/training-activity', {
+            'start': (today-timedelta(days=2)).isoformat(), 'end': today.isoformat()})
+        days = response.json()['days']
+        self.assertEqual([day['hasSubmission'] for day in days], [False, True, False])
+        self.assertEqual([day['daily'] for day in days], [0, 1, 0])
+        self.assertEqual([day['ac'] for day in days], [0, 0, 0])
+
     def test_real_contest_dates_and_undated_credits_not_fabricated(self):
         PlatformBinding.objects.create(user=self.author, platform='codeforces', account='author')
         p = ContestParticipation.objects.create(user=self.author, platform='codeforces', account='author',

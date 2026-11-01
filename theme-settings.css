@@ -339,7 +339,11 @@ html body .topbar .logout-button{padding:8px 10px;white-space:nowrap;}
 @media(max-width:760px){.activity-heatmap[data-range="month"] .activity-heat-grid,.activity-month-labels{gap:3px;}.activity-heatmap[data-range="month"] .activity-weekdays{gap:3px;}.activity-month-labels{font-size:11px;}}
 
 /* Separate month blocks share the exact same cell dimensions in both ranges. */
-.activity-heat-scroll{container-type:inline-size;}
+.activity-heat-scroll{container-type:inline-size;max-width:100%;overflow-x:auto;overflow-y:hidden;touch-action:pan-x pan-y pinch-zoom;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scroll-behavior:auto;scrollbar-width:none;user-select:none;-webkit-user-select:none;}
+.activity-heat-scroll::-webkit-scrollbar{display:none;}
+.activity-heat-scroll.is-scrollable{cursor:grab;}
+.activity-heat-scroll.is-dragging{cursor:grabbing;}
+.activity-heat-scroll .activity-heat-cell{cursor:inherit;-webkit-tap-highlight-color:transparent;}
 #activityHeatmap{--activity-cell:18px;--activity-gap:4px;align-items:stretch;}
 @supports(width:1cqw){#activityHeatmap{--activity-cell:clamp(10px,calc((100cqw - 130px)/22),28px);}}
 #activityHeatmap .activity-month-sections{display:flex;gap:12px;flex:none;align-items:start;}

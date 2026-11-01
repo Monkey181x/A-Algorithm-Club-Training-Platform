@@ -80,14 +80,15 @@ def training_activity(request):
         week = next((w for w in weeks if timezone.localdate(w.starts_at) <= day < timezone.localdate(w.ends_at)), None)
         permission = permissions.get(day)
         completed = bool(checks.get(day) or permission and permission.completed_at)
-        submitted = day in daily_by_date or day in checks
+        daily_count = daily_by_date.get(day, 0)
+        submitted = daily_count > 0 or day in checks
         allowed = bool(member.pk and semester and week and semester.is_active and not semester.archived_at
             and semester.starts_on <= day <= min(today, semester.ends_on))
         if allowed:
             allowed = (not week.is_closed and week.starts_at <= now < week.ends_at) if day == today else not submitted and not completed
         if getattr(request,'admin_test_mode',False): allowed=day<=today and day.year>=2000
-        days.append({'date': day.isoformat(), 'ac': ac_by_date[day], 'daily': daily_by_date[day],
-            'submitted': submitted, 'checkedIn': day in checks, 'hasSubmission': day in daily_by_date,
+        days.append({'date': day.isoformat(), 'ac': ac_by_date.get(day, 0), 'daily': daily_count,
+            'submitted': submitted, 'checkedIn': day in checks, 'hasSubmission': daily_count > 0,
             'isMakeup': completed, 'makeupOpen': bool(permission and not permission.completed_at),
             'canSubmit': allowed, 'weekId': week.pk if week else None, 'isToday': day == today,
             'records': events.get(day, [])})
