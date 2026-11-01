@@ -271,3 +271,52 @@ class SubmissionReconciliationTests(TestCase):
             self.assertEqual(self.balance(), 5)
         inventory.refresh_from_db()
         self.assertEqual(inventory.quantity, 1)
+
+    def test_standalone_checkin_without_valid_submission_has_no_side_effects(self):
+        StreakReward.objects.create(team=self.team,days=1,reward=5)
+        for day in (self.today, self.today-timedelta(days=1)):
+            from .currency_services import perform_checkin
+            with self.assertRaisesMessage(ValueError, '没有有效提交'):
+                perform_checkin(self.author_member, day=day)
+        response = self.client.post('/api/currency/checkin')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(CheckinRecord.objects.filter(member=self.author_member).exists())
+        self.assertFalse(CurrencyTransaction.objects.filter(member=self.author_member).exists())
+        self.assertFalse(WeeklyStreakGrant.objects.filter(member=self.author_member).exists())
+
+    def test_standalone_checkin_cannot_restore_deleted_or_rejected_submission_rewards(self):
+        StreakReward.objects.create(team=self.team,days=1,reward=5)
+        for reject in (False, True):
+            with self.subTest(reject=reject):
+                self.problem = Problem.objects.create(identity=f'checkin:bypass:{reject}',url=f'https://example.com/bypass/{reject}')
+                item = self.submit_day()
+                if reject:
+                    self.reject(item)
+                else:
+                    self.remove(item)
+                before = CurrencyTransaction.objects.filter(member=self.author_member).count()
+                for _ in range(2):
+                    response = self.client.post('/api/currency/checkin')
+                    self.assertEqual(response.status_code, 400, response.content)
+                self.assertEqual(self.balance(), 0)
+                self.assertFalse(CheckinRecord.objects.filter(member=self.author_member).exists())
+                self.assertIsNotNone(WeeklyStreakGrant.objects.get(member=self.author_member).revoked_at)
+                self.assertEqual(CurrencyTransaction.objects.filter(member=self.author_member).count(), before)
+
+    def test_standalone_checkin_requires_same_member_team_and_record_date(self):
+        item = self.submit_day()
+        CheckinRecord.objects.filter(member=self.author_member).delete()
+        CurrencyBalance.objects.filter(member=self.author_member).update(balance=0)
+        item.record_date = self.today-timedelta(days=1)
+        item.save(update_fields=['record_date'])
+        self.assertEqual(self.client.post('/api/currency/checkin').status_code, 400)
+        item.record_date = self.today
+        item.member = self.owner_member
+        item.save(update_fields=['record_date','member'])
+        self.assertEqual(self.client.post('/api/currency/checkin').status_code, 400)
+        item.member = self.author_member
+        item.save(update_fields=['member'])
+        self.assertEqual(self.client.post('/api/currency/checkin').status_code, 200)
+        self.assertEqual(self.balance(), 3)
+        self.assertEqual(self.client.post('/api/currency/checkin').status_code, 400)
+        self.assertEqual(self.balance(), 3)

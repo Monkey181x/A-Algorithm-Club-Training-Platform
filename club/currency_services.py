@@ -2,6 +2,7 @@
 Currency system business logic
 """
 from datetime import date, timedelta
+from django.contrib.auth.models import User
 from django.db import transaction,IntegrityError
 from django.db.models import Sum
 import uuid
@@ -112,8 +113,14 @@ def perform_checkin(member, *, day=None):
     today = day or timezone.localdate()
     if not member.pk:
         raise ValueError('仅团队成员可以签到')
+    # Use the same lock order as submission creation, deletion and rejection.
+    User.objects.select_for_update().get(pk=member.user_id)
     if not TeamMembership.objects.select_for_update().get(pk=member.pk).is_active:
         raise ValueError('当前成员权限已失效')
+    from .models import Submission
+    if not Submission.objects.filter(team=member.team, member=member,
+            record_date=today, is_valid=True).exists():
+        raise ValueError('该日期没有有效提交，不能签到或领取奖励')
 
     # Check if already checked in today
     if CheckinRecord.objects.filter(team=member.team, member=member, checkin_date=today).exists():
