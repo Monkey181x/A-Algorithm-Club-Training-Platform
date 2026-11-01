@@ -28,7 +28,7 @@
     submissions:{name:'我的提交', selectors:'.my-submissions-live'},
     showcase:{name:'团队提交 / 题解', selectors:'.problem-toolbar,.problem-list,.submission-days,.problem-detail,.solution-card,.solution-item'},
     members:{name:'成员卡片', selectors:'.member-card'},
-    contests:{name:'赛事中心', selectors:'.contest-overview,.contest-browser,.contest-card,.contest-problem-tray'},
+    contests:{name:'赛事中心', selectors:'.contest-overview,.contest-browser,.contest-card,.contest-problem-tray,.tracker-browser,.tracker-summary>div'},
     extensions:{name:'拓展工具', selectors:'.extension-tile,.extension-form,#extensionsView .panel'},
     admin:{name:'管理工作台', selectors:'.workbench-panel,.workbench-scope,.workbench-team,.workbench-nav'},
     shop:{name:'RBC 商店 / 背包', selectors:'.shop-item-card,.currency-summary,.transaction-list,.currency-stat-card,.currency-panel,.currency-balance-card,.inventory-item,#rbcshopView .panel'},

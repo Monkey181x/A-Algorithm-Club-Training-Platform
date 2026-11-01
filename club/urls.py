@@ -3,6 +3,9 @@ from . import extension_views
 from . import member_management
 from .activity_views import training_activity
 from . import profile_views
+from . import platform_account_views
+from . import tracker_views
+from . import platform_rewards
 from . import contest_progress_views
 
 from . import contest_views, daily_views, views, community_views as community, management_views as management, currency_views as currency
@@ -18,6 +21,12 @@ urlpatterns = [
     path('management/teams/<int:team_id>/members', member_management.member_list),
     path('management/teams/<int:team_id>/members/<int:member_id>/settings', member_management.member_settings),
     path('management/teams/<int:team_id>/members/<int:member_id>/inventory', member_management.inventory_settings),
+    path('profile/platform-rewards/claim', platform_rewards.claim),
+    path('trackers/<str:kind>', tracker_views.tracker),
+    path('trackers/<str:kind>/refresh', tracker_views.tracker, {'refresh': True}),
+    path('profile/platforms/<str:platform>/accounts', platform_account_views.accounts),
+    path('profile/platform-accounts/sync', platform_account_views.sync),
+    path('profile/platform-accounts/<int:binding_id>', platform_account_views.account_detail),
     path("currency/inventory/<int:unit_id>/redeem", shop_fulfillment.redeem),
     path("currency/inventory/<int:inventory_id>/use", shop_fulfillment.use_consumable),
     path("submissions/<int:submission_id>/reversal-preview", views.submission_reversal_preview),

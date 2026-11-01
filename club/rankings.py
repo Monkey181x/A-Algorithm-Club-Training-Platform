@@ -62,7 +62,22 @@ def ranking_data(member, scope, platform='codeforces', period='semester'):
         bindings = PlatformBinding.objects.filter(user_id__in=[m.user_id for m in members],platform=db_platform)
         if platform == 'leetcode_cn': bindings = bindings.filter(account__startswith='cn:')
         if platform == 'leetcode_us': bindings = bindings.exclude(account__startswith='cn:')
-        bindings = {b.user_id:b for b in bindings}
+        selected = {}
+        for binding in bindings.order_by('id'):
+            value = (binding.snapshot or {}).get('rating')
+            try:
+                value = float(value)
+                if isinstance((binding.snapshot or {}).get('rating'), bool) or not math.isfinite(value) or value < 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            previous = selected.get(binding.user_id)
+            if previous is None or value > float(previous.snapshot['rating']):
+                selected[binding.user_id] = binding
+        # Keep unrated members visible when they have a binding.
+        for binding in bindings.order_by('id'):
+            selected.setdefault(binding.user_id, binding)
+        bindings = selected
         for m in members:
             binding = bindings.get(m.user_id)
             if not binding:

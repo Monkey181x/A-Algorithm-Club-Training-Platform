@@ -45,6 +45,8 @@ def problem_url(platform,key,account):
         return 'https://www.luogu.com.cn/problem/'+key.upper()
     if platform=='nowcoder':
         return 'https://ac.nowcoder.com/acm/'+key
+    if platform=='qoj':
+        return 'https://qoj.ac/problem/'+key
     return ''
 
 

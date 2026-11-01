@@ -24,14 +24,22 @@ def difficulty_value(value):
 
 def reward_for(problem, member, profile=None):
     contest = problem.participation
-    # Explicit local QA fixtures only: no public endpoint writes these keys,
-    # and the simulated clock applies exclusively to their designated team.
-    demo = contest.source_data.get('demo') is True and contest.source_data.get('demo_team_id') == member.team_id
-    if contest.source_data.get('demo') is True and not demo:
-        return 0, '', '演示奖励仅可在指定测试团队领取'
-    now = max(timezone.now(), contest.ends_at) if demo else timezone.now()
+    if contest.source_data.get('demo') is True:
+        return 0, '', '演示记录不参与奖励'
+    now = timezone.now()
     if not member.team.currency_enabled:
         return 0, '', '当前团队未启用 RBC'
+    if contest.platform == 'qoj':
+        from .reward_rules import group_for, amount_for
+        if not problem.accepted:return 0, '', '尚无 AC 记录'
+        if problem.accepted_at is not None and (problem.accepted_at<REWARD_START or problem.accepted_at>now):
+            return 0, '', '当前记录不参与奖励'
+        day=timezone.localdate(problem.accepted_at) if problem.accepted_at else timezone.localdate()
+        group=group_for(member.user,day,profile)
+        if group is None:return 0, '', '请完善年级资料'
+        source='contest' if problem.official_ac and problem.accepted_at is not None and contest.starts_at<=problem.accepted_at<contest.ends_at else 'practice'
+        amount=amount_for(member.team,'qoj',group,source=source,day=day)
+        return amount,group,'' if amount else '当前奖励为 0'
     if contest.starts_at < REWARD_START:
         return 0, '', '2026-11-01 前的比赛不发放奖励'
     if contest.starts_at > now:
@@ -53,22 +61,18 @@ def reward_for(problem, member, profile=None):
     level = grade_on(profile, timezone.localtime(contest.starts_at).date())
     if level is None:
         return 0, '', '入学年份资料缺失，请联系系统管理员核对'
-    group = 'beginner' if level == 0 else 'experienced'
-    low, high = THRESHOLDS[contest.platform][group]
-    difficulty = difficulty_value(problem.difficulty)
-    tier = 0 if difficulty is None or difficulty < low else 1 if difficulty < high else 2
-    config=member.team.problem_rewards or default_problem_rewards()
-    values=config.get(group) if isinstance(config,dict) else None
-    if not isinstance(values,list) or len(values)!=3 or any(type(v) is not int or not 0<=v<=100000 for v in values):
-        return 0,group,'比赛奖励配置异常，请联系系统管理员'
-    amount = values[tier]
+    from .reward_rules import amount_for, group_for
+    day=timezone.localtime(contest.starts_at).date()
+    group=group_for(None,day,profile)
+    amount = amount_for(member.team,contest.platform,group,problem.difficulty,day=day,level=level)
     return amount, group, '' if amount else '当前档位奖励为 0'
 
 
 def claimed(problem, member):
     contest = problem.participation
     from django.db.models import Q
-    return ContestProblemClaim.objects.filter(team=member.team, platform=contest.platform,
+    from .platform_rewards import platform_claimed
+    return platform_claimed(problem,member) or ContestProblemClaim.objects.filter(team=member.team, platform=contest.platform,
         contest_key=contest.contest_key, problem_key=problem.problem_key).filter(
         Q(user=member.user) | Q(member=member) | Q(account=contest.account.casefold())).exists()
 
@@ -79,6 +83,9 @@ def serialize_participation(contest, member, context=None):
     for p in contest.problems.all():
         amount, group, reason = reward_for(p, member, context['profile'] if context else None)
         taken = ((contest.platform, contest.contest_key, p.problem_key) in context['member_claims'] or (contest.platform, contest.account.casefold(), contest.contest_key, p.problem_key) in context['account_claims']) if context else claimed(p, member)
+        if context and not taken:
+            from .platform_rewards import platform_claimed
+            taken=platform_claimed(p,member)
         if not bound:
             reason = '当前未绑定该参赛账号'
         rows.append({'id': p.pk, 'label': p.label, 'title': p.title, 'url': p.url,
@@ -115,6 +122,11 @@ def claim_problems(member, ids=None):
             continue
         try:
             with transaction.atomic():
+                from .models import PlatformProblemClaim
+                from .platform_rewards import contest_identity
+                platform,key=contest_identity(p)
+                PlatformProblemClaim.objects.create(team=member.team,user=member.user,member=member,
+                    platform=platform,account=c.account.casefold(),problem_key=key,amount=amount,group=group,source='contest')
                 ContestProblemClaim.objects.create(member=member, user=member.user, team=member.team, platform=c.platform,
                     account=c.account.casefold(), contest_key=c.contest_key, problem_key=p.problem_key,
                     amount=amount, group=group)

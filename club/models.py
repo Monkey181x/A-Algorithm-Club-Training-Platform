@@ -63,6 +63,7 @@ class Team(models.Model):
     currency_icon = models.FileField(upload_to="currency_icons/", blank=True, verbose_name="货币图标")
     daily_checkin_reward = models.PositiveIntegerField(default=1, verbose_name="每日签到奖励")
     problem_rewards = models.JSONField(default=dict, blank=True)
+    reward_settings = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.name} ({self.code})"
@@ -575,6 +576,9 @@ class PlatformBinding(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='platform_bindings')
     platform = models.CharField(max_length=20)
     account = models.CharField(max_length=100)
+    normalized_account = models.CharField(max_length=100, blank=True)
+    encrypted_credentials = models.TextField(blank=True)
+    sync_state = models.JSONField(default=dict)
     snapshot = models.JSONField(default=dict)
     status = models.CharField(max_length=16, default='pending')
     error = models.CharField(max_length=240, blank=True)
@@ -583,7 +587,62 @@ class PlatformBinding(models.Model):
     synced_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=['user', 'platform'], name='unique_user_platform')]
+        constraints = [models.UniqueConstraint(fields=['user', 'platform', 'normalized_account'], name='unique_user_platform_account')]
+
+    def save(self, *args, **kwargs):
+        self.normalized_account = self.account.strip().casefold()
+        if kwargs.get('update_fields') and 'account' in kwargs['update_fields']:
+            kwargs['update_fields'] = set(kwargs['update_fields']) | {'normalized_account'}
+        super().save(*args, **kwargs)
+
+
+class PlatformSolvedRecord(models.Model):
+    binding = models.ForeignKey(PlatformBinding, on_delete=models.CASCADE, related_name='solved_records')
+    problem_key = models.CharField(max_length=200)
+    title = models.CharField(max_length=300, blank=True)
+    url = models.URLField(max_length=1000, blank=True)
+    solved_on = models.DateField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['binding', 'problem_key'], name='unique_binding_solved_problem')]
+
+
+class TrackerCatalog(models.Model):
+    kind = models.CharField(max_length=20, unique=True)
+    contests = models.JSONField(default=list)
+    updated_at = models.DateTimeField(null=True, blank=True)
+    requested_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=16, default='idle')
+    token = models.UUIDField(default=uuid.uuid4)
+    error = models.CharField(max_length=240, blank=True)
+    refresh_state = models.JSONField(default=dict)
+
+
+class QojCatalogOverlay(models.Model):
+    binding = models.OneToOneField(PlatformBinding, on_delete=models.CASCADE, related_name='qoj_catalog')
+    contests = models.JSONField(default=dict)
+    queue = models.JSONField(default=list)
+    token = models.UUIDField(default=uuid.uuid4)
+    status = models.CharField(max_length=16, default='idle')
+    error = models.CharField(max_length=240, blank=True)
+    updated_at = models.DateTimeField(null=True, blank=True)
+
+
+class PlatformProblemClaim(models.Model):
+    team = models.ForeignKey(Team, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
+    member = models.ForeignKey(TeamMembership, null=True, on_delete=models.SET_NULL)
+    platform = models.CharField(max_length=20)
+    account = models.CharField(max_length=100)
+    problem_key = models.CharField(max_length=200)
+    amount = models.PositiveIntegerField()
+    group = models.CharField(max_length=20)
+    source = models.CharField(max_length=16, default='practice')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['team','user','platform','problem_key'], name='unique_user_team_platform_reward'),
+                       models.UniqueConstraint(fields=['team','platform','account','problem_key'], name='unique_team_account_platform_reward')]
 
 
 class PlatformSolvedBaseline(models.Model):

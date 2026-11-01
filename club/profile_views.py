@@ -27,13 +27,16 @@ def avatar_url(user, size='large'):
 
 def serialize_binding(binding):
     pending = binding.status == 'pending'
-    expired = pending and binding.requested_at < timezone.now() - timedelta(minutes=4)
+    expired = pending and binding.requested_at < timezone.now() - timedelta(minutes=5)
     from .models import PlatformSolvedBaseline
     try:
         baseline=binding.solved_baseline
     except PlatformSolvedBaseline.DoesNotExist:
         baseline=None
     return {
+        'id': binding.pk,
+        'has_credentials': bool(binding.encrypted_credentials),
+        'sync_progress': {'pages': binding.sync_state.get('pages', 0), 'count': binding.sync_state.get('count', 0)},
         'platform': binding.platform, 'account': binding.account,
         'snapshot': binding.snapshot,
         'status': 'failed' if expired else binding.status,
@@ -50,6 +53,8 @@ def profile_data(request):
     from .grades import grade_on, GRADES
     personal = UserProfile.objects.filter(user=request.user).first()
     grade = grade_on(personal)
+    from .platform_rewards import available_rewards
+    rewards=available_rewards(member)
     return {'name': member.display_name, 'account': request.user.username, 'title':title_data(member), 'titles':titles_data(member),
             'cohort':cohort_data(personal), 'grade': grade, 'grade_label': GRADES[grade] if grade is not None else '注册资料缺失，请联系管理员',
             'grade_options': GRADES,
@@ -57,6 +62,7 @@ def profile_data(request):
             'avatar_small': avatar_images.url_for(personal, member.pk, 'small'),
             'member_id': member.pk, 'member_avatar': avatar_images.url_for(personal, member.pk, 'small'),
             'platforms': PLATFORMS,
+            'rewards':{'keys':list(rewards),'total':sum(row['amount'] for row in rewards.values())},
             'bindings': [serialize_binding(b) for b in request.user.platform_bindings.select_related('solved_baseline')]}
 
 
@@ -271,6 +277,8 @@ def platform_binding(request, platform):
         from django.contrib.auth.models import User
         User.objects.select_for_update().get(pk=request.user.pk)
         binding = PlatformBinding.objects.filter(user=request.user, platform=platform).first()
+        if PlatformBinding.objects.filter(user=request.user, platform=platform).count() > 1:
+            return api_error('请选择具体账号', 409)
         if request.method == 'DELETE':
             if binding:
                 binding.delete()
@@ -293,6 +301,13 @@ def platform_binding(request, platform):
                     from .models import PlatformSolvedBaseline
                     PlatformSolvedBaseline.objects.filter(binding=binding).delete()
             binding.account = account
+        if platform == 'qoj' or binding.sync_state.get('version') == 2:
+            from .platform_account_views import start
+            if not binding.pk:
+                binding.save()
+            start(binding, data.get('full') is True)
+            binding.refresh_from_db()
+            return JsonResponse(serialize_binding(binding), status=202)
         binding.sync_token = uuid.uuid4()
         binding.requested_at = timezone.now()
         binding.status = 'pending'; binding.error = ''

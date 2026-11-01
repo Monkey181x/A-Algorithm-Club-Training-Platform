@@ -99,6 +99,9 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 7 * 1024 * 1024
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
 CELERY_TIMEZONE = TIME_ZONE
+CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'},
+          'platform_requests': {'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+                                'LOCATION': os.environ.get('PLATFORM_RATE_CACHE', 'redis://redis:6379/2')}}
 CELERY_ENABLE_UTC = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_DEFAULT_PRIORITY = 5
@@ -106,6 +109,8 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {'priority_steps':list(range(10)), 'queue_orde
 from celery.schedules import crontab
 
 CELERY_BEAT_SCHEDULE = {
+    'refresh-tracker-catalogs': {'task': 'club.tasks.refresh_tracker_catalogs',
+                               'schedule': crontab(hour='6,18', minute=0)},
     "refresh-contest-calendar": {
         "task": "club.tasks.refresh_contest_calendar",
         "schedule": crontab(hour="6,18", minute=0),

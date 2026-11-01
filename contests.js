@@ -243,6 +243,6 @@
   el('contestPrev').addEventListener('click',() => {page--;render();});
   el('contestNext').addEventListener('click',() => {page++;render();});
   function tick() {if (!active || document.hidden) return; if (Date.now()-loadedAt >= 900000) load(); else render();}
-  window.contestSchedule = {activate(value) {active=value;clearInterval(timer);clearTimeout(progressTimer);if(value){loadProgress();if(!data || Date.now()-loadedAt>60000) load();else render();timer=setInterval(tick,30000);}}};
+  window.contestSchedule = {activate(value) {active=value;window.contestTracker?.activate(value);clearInterval(timer);clearTimeout(progressTimer);if(value){loadProgress();if(!data || Date.now()-loadedAt>60000) load();else render();timer=setInterval(tick,30000);}}};
   document.addEventListener('visibilitychange',tick);
 })();

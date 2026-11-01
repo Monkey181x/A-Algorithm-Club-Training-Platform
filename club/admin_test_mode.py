@@ -104,8 +104,8 @@ def activate(request,admin,target_id):
     team,_=Team.objects.get_or_create(code=sandbox_code(admin,target),defaults={'name':target.name+'（管理员私有测试）','created_by':admin})
     if team.created_by_id!=admin.pk: return JsonResponse({'error':'测试空间冲突'},status=409)
     team.name=(target.name+'（管理员私有测试）')[:80]
-    for field in ('currency_enabled','daily_checkin_reward','problem_rewards'): setattr(team,field,getattr(target,field))
-    team.save(update_fields=['name','currency_enabled','daily_checkin_reward','problem_rewards'])
+    for field in ('currency_enabled','daily_checkin_reward','problem_rewards','reward_settings'): setattr(team,field,getattr(target,field))
+    team.save(update_fields=['name','currency_enabled','daily_checkin_reward','problem_rewards','reward_settings'])
     TeamMembership.objects.get_or_create(user=user,team=team,defaults={'display_name':'管理员测试用户'})
     from django.utils import timezone
     today=timezone.localdate()

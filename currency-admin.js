@@ -190,7 +190,14 @@ const CurrencyAdminModule = (() => {
       container.innerHTML = '<p role="alert">无法加载货币配置，请重新打开团队配置。</p>';
       return;
     }
-    const streaks = config.streak_rewards.length || config.currency_enabled ? config.streak_rewards : [{days:3,reward:1},{days:7,reward:2}];
+    const groupNames = config.reward_groups;
+    const groupKeys = Object.keys(groupNames).sort((a,b)=>Number(b)-Number(a));
+    const platforms = {codeforces:'Codeforces',atcoder:'AtCoder',nowcoder:'牛客',luogu:'洛谷',leetcode:'LeetCode',qoj:'QOJ'};
+    const rewardGroups = config.reward_settings;
+    const rewardMarkup = groupKeys.map(group => {
+      const settings = rewardGroups[group];
+      return `<section class="cohort-reward-settings" data-reward-group="${group}" ${group===groupKeys[0]?'':'hidden'}><h4>${groupNames[group]}</h4><label>每日签到 Coins<input type="number" data-daily-reward min="0" max="100000" required value="${settings.daily_checkin_reward}"></label><h4>自然周连签</h4><div class="group-streak-rules"></div><button type="button" class="secondary-button" data-add-group-streak>＋ 添加连签奖励</button><h4>平台单题奖励</h4><div class="platform-reward-table-wrap"><table class="platform-reward-table"><thead><tr><th rowspan="2">平台</th><th colspan="3">赛内 AC</th><th colspan="3">补题 AC</th></tr><tr>${['第一档','第二档','第三档','第一档','第二档','第三档'].map(label=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${Object.entries(platforms).map(([platform,name])=>`<tr><th>${name}</th>${['contest','practice'].map(source=>platform==='qoj' ? `<td colspan="3"><input type="number" aria-label="${groupNames[group]} QOJ ${source==='contest'?'赛内':'补题'}每题 Coins" data-platform-reward="${platform}" data-source="${source}" min="0" max="100000" required value="${settings[source+'_rewards'][platform][0]}"></td>` : settings[source+'_rewards'][platform].map((value,index)=>`<td><input type="number" aria-label="${groupNames[group]} ${name} ${source==='contest'?'赛内':'补题'}第${index+1}档 Coins" data-platform-reward="${platform}" data-source="${source}" min="0" max="100000" required value="${value}"></td>`).join('')).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+    }).join('');
     container.innerHTML = `
       <form class="currency-config-panel workbench-form">
         <h3>货币系统配置</h3>
@@ -199,38 +206,44 @@ const CurrencyAdminModule = (() => {
         <fieldset class="currency-config-options" ${config.currency_enabled ? '' : 'hidden disabled'}>
           <label>货币图标（SVG）<input name="currency_icon" type="file" accept=".svg,image/svg+xml"></label>
           ${config.currency_icon ? `<div class="currency-icon-preview"><img src="${escape(config.currency_icon)}" width="32" height="32" alt="当前货币图标"><label class="workbench-check"><input name="remove_icon" type="checkbox">恢复默认图标</label></div>` : ''}
-          <label>每日签到奖励 (RBC)<input name="daily_checkin_reward" type="number" min="0" max="100" required value="${config.daily_checkin_reward}"></label>
-          <p class="muted">每天第一次提交的签到奖励；补签不发放每日奖励。</p>
-          <h4>自然周连签奖励</h4><p class="muted">周一至周日截断，每个天数档位每周只发放一次；补签会重算原周。</p><div class="currency-streak-rules"></div>
-          <button type="button" class="secondary-button" data-add-streak>＋ 添加连签奖励</button>
-          <h4>同步比赛 · 单题奖励</h4><p class="muted">小登：入学后的第一个秋季学期；老登：之后学期。三档按平台题目难度划分；0 表示不奖励。2026-11-01 起的比赛生效；有准确时间时仅正赛时段内 AC 可领奖；已确认 AC 但时间无法核验时，宽松兜底发奖；已知赛外记录不发奖。</p>
-          <div class="problem-reward-grid">${['beginner','experienced'].map(group=>`<fieldset><legend>${group==='beginner'?'小登':'老登'}</legend>${(config.problem_rewards?.[group] || [1,2,3]).map((amount,index)=>`<label>第 ${index+1} 档 RBC<input type="number" data-problem-reward="${group}" data-tier="${index}" min="0" max="100000" required value="${amount}"></label>`).join('')}</fieldset>`).join('')}</div>
-          <details><summary>平台难度档位说明</summary><p class="muted">力扣：萌新 600 / 1200，老登 1000 / 1500；CF：1000 / 1600、1400 / 2000；AtCoder：400 / 1000、800 / 1600；牛客 Rating：1100 / 1600、1600 / 2100；洛谷难度等级：2 / 4、4 / 6。均按“低于第一界限／低于第二界限／其余”分档。缺少难度时按第一档发奖；不会编造题目 Rating。</p></details>
+          <label>奖励分队<select name="reward_group">${groupKeys.map(group=>`<option value="${group}">${groupNames[group]}</option>`).join('')}</select></label>
+          ${rewardMarkup}
         </fieldset>
         <div class="workbench-form-actions"><button type="submit" class="primary-button">保存货币配置</button><span class="currency-config-status" role="status"></span></div>
       </form>`;
     const form = container.querySelector('form');
     const status = container.querySelector('.currency-config-status');
     const options = container.querySelector('fieldset');
-    const addRow = (kind, rule) => {
-      const row = document.createElement('div'); row.className='currency-rule-row'; row.dataset.kind=kind;
+    const addRow = (group, rule) => {
+      const row = document.createElement('div'); row.className='currency-rule-row'; row.dataset.kind='streak';
       row.innerHTML = `<label>连签天数<input class="rule-threshold" aria-label="连签天数" type="number" min="1" max="7" required value="${rule.days}"></label>`;
-      row.innerHTML += `<label>奖励 RBC<input class="rule-reward" aria-label="奖励 RBC" type="number" min="1" max="100000" required value="${rule.reward}"></label><button class="text-button" type="button" aria-label="删除奖励规则">删除</button>`;
+      row.innerHTML += `<label>奖励 Coins<input class="rule-reward" aria-label="奖励 Coins" type="number" min="0" max="100000" required value="${rule.reward}"></label><button class="text-button" type="button" aria-label="删除奖励规则">删除</button>`;
       row.querySelector('button').onclick=()=>row.remove();
-      container.querySelector('.currency-streak-rules').append(row);
+      container.querySelector(`[data-reward-group="${group}"] .group-streak-rules`).append(row);
     };
-    streaks.forEach(r=>addRow('streak',r));
+    for (const group of groupKeys) {
+      rewardGroups[group].streak_rewards.forEach(rule=>addRow(group,rule));
+      container.querySelector(`[data-reward-group="${group}"] [data-add-group-streak]`).onclick=()=>addRow(group,{days:7,reward:2});
+    }
+    form.elements.reward_group.onchange=()=>{
+      container.querySelectorAll('[data-reward-group]').forEach(block=>{block.hidden=block.dataset.rewardGroup!==form.elements.reward_group.value;});
+    };
     form.elements.currency_enabled.onchange=()=>{options.hidden=!form.elements.currency_enabled.checked;options.disabled=options.hidden;};
-    container.querySelector('[data-add-streak]').onclick=()=>addRow('streak',{days:7,reward:2});
     form.onsubmit=async event=>{
       event.preventDefault(); event.stopPropagation();
       const button=event.submitter; button.disabled=true; status.textContent='正在保存…';
       const payload={team_id:teamId,currency_enabled:form.elements.currency_enabled.checked};
       try {
         if (payload.currency_enabled) {
-          payload.daily_checkin_reward=Number(form.elements.daily_checkin_reward.value);
-          payload.problem_rewards=Object.fromEntries(['beginner','experienced'].map(group=>[group,[...container.querySelectorAll('[data-problem-reward='+group+']')].map(input=>Number(input.value))]));
-          payload.streak_rewards=[...container.querySelectorAll('[data-kind="streak"]')].map(row=>({days:Number(row.querySelector('.rule-threshold').value),reward:Number(row.querySelector('.rule-reward').value)}));
+          payload.reward_settings=Object.fromEntries(Object.keys(groupNames).map(group=>{
+            const block=container.querySelector(`[data-reward-group="${group}"]`);
+            const settings={daily_checkin_reward:Number(block.querySelector('[data-daily-reward]').value),streak_rewards:[...block.querySelectorAll('[data-kind="streak"]')].map(row=>({days:Number(row.querySelector('.rule-threshold').value),reward:Number(row.querySelector('.rule-reward').value)}))};
+            for (const source of ['contest','practice']) settings[source+'_rewards']=Object.fromEntries(Object.keys(platforms).map(platform=>{
+              const values=[...block.querySelectorAll(`[data-platform-reward="${platform}"][data-source="${source}"]`)].map(input=>Number(input.value));
+              return [platform,platform==='qoj'?[values[0],values[0],values[0]]:values];
+            }));
+            return [group,settings];
+          }));
           const file=form.elements.currency_icon.files[0];
           if(file){payload.currency_icon_svg=await file.text();}
           else if(form.elements.remove_icon?.checked)payload.currency_icon_svg=null;
