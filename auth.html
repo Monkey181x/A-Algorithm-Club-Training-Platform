@@ -114,13 +114,13 @@
     <section class="auth-card">
       <div class="auth-tabs" role="tablist" aria-label="账号入口"><span class="auth-glass-indicator" aria-hidden="true"></span><button class="active" id="loginTab" role="tab" aria-selected="true" aria-controls="loginForm" data-auth-tab="login" type="button">登录</button><button id="registerTab" role="tab" aria-selected="false" aria-controls="registerForm" tabindex="-1" data-auth-tab="register" type="button">注册</button></div>
       <form class="auth-form active" id="loginForm" role="tabpanel" aria-labelledby="loginTab"><h1>账号登录</h1><label class="auth-field">账号<input name="account" autocomplete="username" required placeholder="你的账号…" /></label><label class="auth-field">密码<input name="password" autocomplete="current-password" required type="password" placeholder="请输入密码…" /></label><button class="primary-button auth-submit" type="submit">登录 <span>→</span></button></form>
-      <form class="auth-form" id="registerForm" role="tabpanel" aria-labelledby="registerTab" hidden><h1>注册账号</h1><label class="auth-field">账号<input name="account" autocomplete="username" minlength="3" maxlength="150" required placeholder="至少 3 位" /></label><label class="auth-field">密码<input name="password" autocomplete="new-password" type="password" minlength="8" maxlength="128" required placeholder="至少 8 位" /></label><label class="auth-field">确认密码<input name="confirm_password" autocomplete="new-password" type="password" minlength="8" maxlength="128" required placeholder="再次输入密码" /></label><label class="auth-field">当前年级<select name="grade" required><option value="">请选择年级</option><option value="0">大一上</option><option value="1">大一下</option><option value="2">大二上</option><option value="3">大二下</option><option value="4">大三+</option></select></label><button class="primary-button auth-submit" type="submit">注册账号</button></form>
+      <form class="auth-form" id="registerForm" role="tabpanel" aria-labelledby="registerTab" hidden><h1>注册账号</h1><label class="auth-field">账号<input name="account" autocomplete="username" minlength="3" maxlength="150" required placeholder="至少 3 位" /></label><label class="auth-field">密码<input name="password" autocomplete="new-password" type="password" minlength="8" maxlength="128" required placeholder="至少 8 位" /></label><label class="auth-field">确认密码<input name="confirm_password" autocomplete="new-password" type="password" minlength="8" maxlength="128" required placeholder="再次输入密码" /></label><label class="auth-field">入学年份<select name="admission_year" required disabled><option value="">正在加载入学年份…</option></select></label><p class="muted">入学年份决定所属分队，由系统自动匹配。</p><button class="text-button" id="retryAdmissionYears" type="button" hidden>重新加载入学年份</button><button class="primary-button auth-submit" type="submit" disabled>注册账号</button></form>
       <div class="auth-message" id="authMessage" role="status" aria-live="polite"></div>
     </section>
     </div>
   </main>
   <script src="api.js"></script>
-  <script src="auth.js"></script>
+  <script src="auth.js?v=admission-year-20261102"></script>
   <script src="static/glass-drag.js?v=1"></script>
 </body>
 </html>

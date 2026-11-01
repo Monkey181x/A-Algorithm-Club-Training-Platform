@@ -3,6 +3,34 @@ const authMessage = (text, error=true) => { auth$('#authMessage').textContent = 
 const systemNotice = new URLSearchParams(location.search).get('notice');
 if (systemNotice === 'password-changed') authMessage('密码已保存，请使用新密码重新登录。', false);
 if (systemNotice === 'restored') authMessage('数据恢复完成，请使用备份时的账号密码重新登录。', false);
+
+const registrationForm = auth$('#registerForm');
+const admissionYearSelect = registrationForm?.elements.admission_year;
+let admissionYearsReady = false;
+let admissionYearsLoading = false;
+async function loadAdmissionYears() {
+  if (!admissionYearSelect || admissionYearsReady || admissionYearsLoading) return;
+  admissionYearsLoading = true;
+  const submit = registrationForm.querySelector('[type=submit]');
+  const retry = auth$('#retryAdmissionYears');
+  admissionYearSelect.disabled = true; submit.disabled = true; retry.hidden = true;
+  try {
+    const response = await clubApi.request('/api/auth/registration-options');
+    if (!response.ok) throw new Error('入学年份加载失败，请重试');
+    const result = await response.json();
+    if (!Array.isArray(result.admission_years) || !result.admission_years.length) throw new Error('暂时没有可选的入学年份，请重试');
+    admissionYearSelect.replaceChildren(new Option('请选择入学年份', ''),
+      ...result.admission_years.map(item => new Option(`${item.value}年`, String(item.value))));
+    admissionYearsReady = true;
+    admissionYearSelect.disabled = false; submit.disabled = false;
+    if (!registrationForm.hidden) authMessage('', false);
+  } catch (error) {
+    admissionYearSelect.replaceChildren(new Option('入学年份加载失败', ''));
+    retry.hidden = false;
+    if (!registrationForm.hidden) authMessage(error.message || '入学年份加载失败，请重试');
+  } finally { admissionYearsLoading = false; }
+}
+auth$('#retryAdmissionYears')?.addEventListener('click', loadAdmissionYears);
 document.querySelectorAll('[data-auth-tab]').forEach((button) => button.addEventListener('click', () => {
   document.querySelectorAll('[data-auth-tab]').forEach((item) => {
     item.classList.toggle('active', item === button);
@@ -15,6 +43,7 @@ document.querySelectorAll('[data-auth-tab]').forEach((button) => button.addEvent
     form.classList.toggle('active', active); form.hidden = !active;
   });
   authMessage('');
+  if (button.dataset.authTab === 'register') loadAdmissionYears();
 }));
 document.querySelector('.auth-tabs')?.addEventListener('keydown', event => {
   if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
