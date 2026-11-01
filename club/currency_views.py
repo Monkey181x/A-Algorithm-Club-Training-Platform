@@ -210,7 +210,7 @@ def api_contest_submission(request):
     try:picture=decode_shop_image(data.get('screenshot'))
     except ValueError as exc:return api_error(str(exc))
     item=ContestSubmission.objects.create(team=member.team,member=member,contest_name=name.strip(),contest_url=url,screenshot=picture,status=ContestSubmission.PENDING)
-    return JsonResponse({'success':True,'submission_id':item.pk,'message':'比赛材料已保存；自动过题奖励请在比赛日程同步核验并领取'})
+    return JsonResponse({'success':True,'submission_id':item.pk,'message':'比赛材料已保存；自动过题奖励请在赛事中心同步核验并领取'})
 
 
 def shop_item_icon_url(item):
