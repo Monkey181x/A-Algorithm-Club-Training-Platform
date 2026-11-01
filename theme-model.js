@@ -30,11 +30,12 @@
     members:{name:'成员卡片', selectors:'.member-card'},
     contests:{name:'赛事中心', selectors:'.contest-overview,.contest-browser,.contest-card,.contest-problem-tray'},
     extensions:{name:'拓展工具', selectors:'.extension-tile,.extension-form,#extensionsView .panel'},
-    admin:{name:'管理工作台', selectors:'.workbench-panel,.workbench-scope,.workbench-team'},
+    admin:{name:'管理工作台', selectors:'.workbench-panel,.workbench-scope,.workbench-team,.workbench-nav'},
     shop:{name:'RBC 商店 / 背包', selectors:'.shop-item-card,.currency-summary,.transaction-list,.currency-stat-card,.currency-panel,.currency-balance-card,.inventory-item,#rbcshopView .panel'},
     profile:{name:'个人资料 / 平台绑定', selectors:'.personal-page,.personal-basics,.personal-platform-section,.platform-card'},
-    dialog:{name:'弹窗 / 提交表单', selectors:'.modal,.currency-modal,.modal-content,.contest-reward-summary'},
+    dialog:{name:'弹窗 / 提交表单', selectors:'.team-management-dialog,.modal,.currency-modal,.modal-content,.contest-reward-summary'},
     auth:{name:'登录 / 注册 / 团队选择', selectors:'.auth-card'},
+    authStory:{name:'登录 / 注册说明卡片', selectors:'.auth-story'},
     editor:{name:'Markdown 编辑器', selectors:'.blog-editor-modal'},
   };
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -94,6 +95,15 @@
     for(const key of Object.keys(roles))if(s.paletteOverrides?.[mode]?.includes(key)||s.palettes[mode][key]!==palettes[mode][key])derived[key]=s.palettes[mode][key];
     return derived;
   }
+  function companionColor(accent,mode='light') {
+    const [r,g,b]=rgba(accent).map(value=>value/255),max=Math.max(r,g,b),min=Math.min(r,g,b),delta=max-min;
+    let hue=210;
+    if(delta>.035){hue=(max===r?((g-b)/delta)%6:max===g?(b-r)/delta+2:(r-g)/delta+4)*60;hue=(hue+520)%360;}
+    const saturation=.44,lightness=mode==='dark'?.66:.46,c=(1-Math.abs(2*lightness-1))*saturation;
+    const x=c*(1-Math.abs((hue/60)%2-1)),m=lightness-c/2;
+    const rgb=hue<60?[c,x,0]:hue<120?[x,c,0]:hue<180?[0,c,x]:hue<240?[0,x,c]:hue<300?[x,0,c]:[c,0,x];
+    return hex(rgb.map(value=>(value+m)*255));
+  }
   function blockTokens(s,mode,id,palette=paletteOf(s,mode)) {
     const b=s.blocks[mode][id],active=b?.enabled;
     let bg=active?b.background:palette[(['dialog','editor'].includes(id)?'surfaceElevated':'surface')];
@@ -106,5 +116,5 @@
       accent:active&&b.accent?b.accent:palette.accent,scale:(blocks[id]?.kind==='ui'?s.uiScale:s.cardScale)*(active?b.scale:1),
       radius:active&&b.radius!==null?b.radius:s.radius,contrast:contrast(blended,composite(text,blended))};
   }
-  return {roles,palettes,blocks,defaults,blockDefaults,sanitize,rgba,hex,mix,composite,luminance,contrast,autoText,cssColor,modeOf,paletteOf,blockTokens,clone};
+  return {roles,palettes,blocks,defaults,blockDefaults,sanitize,rgba,hex,mix,composite,luminance,contrast,autoText,cssColor,modeOf,paletteOf,blockTokens,companionColor,clone};
 });

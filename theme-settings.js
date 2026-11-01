@@ -79,7 +79,7 @@
     }
     const fill=personal||T.contrast(T.composite(tokens.text,palette.fill),palette.fill)<4.5?T.mix(tokens.solidBackground,tokens.text,.055):palette.fill;
     const elevated=personal?tokens.solidBackground:palette.surfaceElevated;
-    const values={'block-radius':tokens.radius+'px',text:tokens.text,secondary:tokens.secondary,subtle:tokens.tertiary,accent:tokens.accent,'button-text':T.autoText(T.composite(tokens.accent,tokens.solidBackground)),fill,border:palette.separator,elevated};
+    const values={'companion':T.companionColor(tokens.accent,mode()),'block-radius':tokens.radius+'px',text:tokens.text,secondary:tokens.secondary,subtle:tokens.tertiary,accent:tokens.accent,'button-text':T.autoText(T.composite(tokens.accent,tokens.solidBackground)),fill,border:palette.separator,elevated};
     for(const[k,v]of Object.entries(values))setComponentVar(el,'--site-'+k,v);
     const aliases={panel:tokens.background,canvas:palette.pageBackground,blue:tokens.accent,'blue-soft':T.cssColor(tokens.accent,.12),ink:tokens.text,'ink-strong':tokens.text,muted:tokens.secondary,teal:tokens.accent,'teal-dark':tokens.accent,coral:tokens.accent,line:palette.separator,'teal-soft':T.cssColor(tokens.accent,.12)};
     for(const[k,v]of Object.entries(aliases))setComponentVar(el,'--'+k,v);
@@ -121,6 +121,7 @@
     const active=settings.mode!=='original',current=mode(),palette=T.paletteOf(settings,current);
     root.dataset.siteThemeActive=String(active);root.dataset.siteMode=current;root.dataset.siteMotion=settings.animations?'on':'off';root.dataset.siteGlass=settings.glass?'on':'off';root.dataset.siteAlign=settings.align;root.dataset.siteEditing=String(settings.editBlocks);root.dataset.siteDensity=String(active||settings.rowHeight!==52);root.dataset.siteFont=settings.font;
     root.style.setProperty('--site-ui-scale',settings.uiScale);root.style.setProperty('--site-radius',settings.radius+'px');root.style.setProperty('--site-row-height',settings.rowHeight+'px');
+    root.style.setProperty('--site-companion',T.companionColor(palette.accent,current));
     root.style.setProperty('--site-hover',T.mix(palette.fill,palette.accent,.07));
     root.style.setProperty('--site-selected',T.mix(palette.fill,palette.accent,.13));
     root.style.setProperty('--site-avatar-background',T.mix(palette.fill,palette.accent,.14));
@@ -165,6 +166,14 @@
   function colorControl(name,label,value,reset=''){const rgba=T.rgba(value),rgb=value.slice(0,7);return `<div class="settings-color-row"><label for="${name}Color">${label}</label><input type="color" id="${name}Color" name="${name}" aria-label="${label}颜色" value="${rgb}"><input class="settings-hex" name="${name}Hex" aria-label="${label}十六进制颜色" value="${value}" maxlength="9" pattern="#[A-Fa-f0-9]{6}([A-Fa-f0-9]{2})?"><button type="button" class="settings-reset-role" data-reset="${reset}" ${reset?'':'hidden'} aria-label="重置${label}">重置</button><label class="settings-alpha">透明度<input type="range" name="${name}Alpha" aria-label="${label}透明度" min="0" max="1" step="0.01" value="${rgba[3]}"><output data-for="${name}Alpha">${Math.round(rgba[3]*100)}%</output></label></div>`;}
   function section(id,title,copy,content){return `<section class="settings-section" id="${id}"><div class="settings-section-heading"><h2>${title}</h2>${copy?`<p>${copy}</p>`:''}</div><div class="settings-group">${content}</div></section>`;}
 
+  function modeSwitch(kind,index){return `<div class="settings-mode-tabs" data-switch-kind="${kind}" style="--switch-index:${index}" role="group" aria-label="${kind==='palette'?'编辑色板':'自定义主题底色'}"><span class="settings-mode-indicator" aria-hidden="true"></span>${['light','dark'].map((mode,i)=>`<button type="button" ${kind==='palette'?'data-edit-mode':'data-surface-mode'}="${mode}" aria-pressed="${index===i}">${i?'深色':'浅色'}</button>`).join('')}</div>`;}
+  function surfaceModeControl(dark){return `<div class="settings-surface-row"><span>自定义主题底色</span><input type="hidden" name="customDark" value="${dark}">${modeSwitch('surface',dark?1:0)}</div>`;}
+  function animateModeSwitch(kind,previous){
+    const group=document.querySelector(`[data-switch-kind="${kind}"]`),indicator=group?.querySelector('.settings-mode-indicator');
+    const current=Number(group?.style.getPropertyValue('--switch-index'));
+    if(indicator&&settings.animations&&!matchMedia('(prefers-reduced-motion:reduce)').matches&&indicator.animate){indicator.animate([{transform:`translateX(${previous*100}%)`},{transform:`translateX(${current*100}%)`}],{duration:240,easing:'cubic-bezier(.22,.7,.3,1)'});}
+    group?.querySelector('[aria-pressed="true"]')?.focus({preventScroll:true});
+  }
   function renderSettings(){
     const form=document.querySelector('#appearanceForm');if(!form)return;
     const d=settings,b=d.blocks[editingMode][editingBlock]||T.blockDefaults();
@@ -173,7 +182,7 @@
       section('theme','主题与外观','',
         select('mode','主题模式',[['original','原站主题'],['system','跟随系统'],['light','浅色'],['dark','深色'],['custom','自定义主题']],d.mode)+
         `<div class="settings-swatches">${swatches.map(([c,n])=>`<button type="button" aria-label="主题色：${n}" title="${n}" data-accent="${c}" style="--swatch:${c}" ${d.mode==='custom'&&d.accent===c?'aria-pressed="true"':'aria-pressed="false"'}><span class="theme-swatch-dot" aria-hidden="true"></span><span>${n}</span></button>`).join('')}</div>`+
-        colorControl('accent','自定义主题色',d.accent)+select('customDark','自定义主题底色',[['false','浅色底'],['true','深色底']],d.customDark)+
+        colorControl('accent','自定义主题色',d.accent)+surfaceModeControl(d.customDark)+
         `<button class="settings-link" type="button" id="derivePalette">恢复按主题色自动派生</button>`)+
       section('typography','文字与排版','界面文字与内容卡片分别缩放，避免一处调大导致全部挤在一起。',
         select('font','字体',[['system','系统字体 · 跟随设备'],['sans','无衬线 · Arial / 微软雅黑']],d.font)+
@@ -184,7 +193,7 @@
         toggle('heatmapMonthGap','热力图月份间隔',d.heatmapMonthGap,'在不同月份之间留出间距；月份和学期视图均生效，默认开启。')+slider('radius','卡片圆角',d.radius,6,26,1)+slider('rowHeight','列表行高',d.rowHeight,46,96,1)+slider('opacity','卡片不透明度',d.opacity,.05,1,.01)+
         slider('blur','毛玻璃模糊',d.blur,0,40,1,'模糊较高时，低性能设备可能不够流畅。')+toggle('glass','毛玻璃',d.glass,'关闭后使用不透明底色。')+toggle('animations','连贯动画',d.animations,'切页、展开与按压反馈；同时尊重系统的减少动态效果设置。'))+
       section('palette','自定义色板','与软件一致，页面底、卡片、浮层、文字、分隔线、强调色和遮罩均可独立调节。',
-        `<div class="settings-mode-tabs" role="group" aria-label="编辑色板"><button type="button" data-edit-mode="light" aria-pressed="${editingMode==='light'}">浅色主题</button><button type="button" data-edit-mode="dark" aria-pressed="${editingMode==='dark'}">深色主题</button></div>`+
+        modeSwitch('palette',editingMode==='dark'?1:0)+
         Object.entries(T.roles).map(([key,name])=>colorControl('palette-'+key,name,d.palettes[editingMode][key],key)).join(''))+
       section('blocks','板块独立设置','每个板块可沿用全局设置，也可以单独设置背景、文字、强调色、透明度和字号。',
         select('editingBlock','选择板块',Object.entries(T.blocks).map(([id,v])=>[id,v.name]),editingBlock)+
@@ -234,7 +243,8 @@
     form.addEventListener('click',event=>{
       const button=event.target.closest('button');if(!button)return;
       if(button.dataset.accent){changePreset(button);return;}
-      if(button.dataset.editMode){editingMode=button.dataset.editMode;renderSettings();}
+      if(button.dataset.surfaceMode){const previous=settings.customDark?1:0;settings.customDark=button.dataset.surfaceMode==='dark';settings.mode='custom';editingMode=mode();save();renderSettings();animateModeSwitch('surface',previous);return;}
+      if(button.dataset.editMode){const previous=editingMode==='dark'?1:0;editingMode=button.dataset.editMode;renderSettings();animateModeSwitch('palette',previous);}
       if(button.dataset.reset){updateColor('palette-'+button.dataset.reset,T.palettes[editingMode][button.dataset.reset]);save();renderSettings();}
       if(button.id==='derivePalette'){settings.palettes=T.clone(T.palettes);settings.paletteOverrides={light:[],dark:[]};settings.mode='custom';save();renderSettings();}
       if(button.id==='resetBlock'){delete settings.blocks[editingMode][editingBlock];save();renderSettings();}

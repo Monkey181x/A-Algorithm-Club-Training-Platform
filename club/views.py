@@ -236,6 +236,14 @@ def join_team(request):
     return JsonResponse({'ok': True, 'team': team.name, 'name': membership.display_name})
 
 
+def registration_options(request):
+    if request.method != 'GET':
+        return api_error('仅支持 GET',405)
+    from .grades import academic_year, chinese_number
+    current = academic_year()
+    return JsonResponse({'admission_years':[{'value':year,'label':f'{year}级 · 第{chinese_number(year-2012)}分队'} for year in range(current,2012,-1)]})
+
+
 def register_account(request):
     if request.method != "POST":
         return api_error("仅支持 POST", 405)
@@ -250,16 +258,17 @@ def register_account(request):
         return api_error("两次密码不一致")
     if User.objects.filter(username=account).exists():
         return api_error("该账号已存在")
-    from .grades import validate_grade
+    from .grades import validate_grade, validate_admission_year, academic_year, grade_for_year
     from .models import UserProfile
     try:
-        grade = validate_grade(data.get('grade'))
+        year = validate_admission_year(data.get('admission_year')) if 'admission_year' in data else academic_year()-validate_grade(data.get('grade'))//2
+        grade = grade_for_year(year)
     except ValueError as exc:
         return api_error(str(exc))
     try:
         with transaction.atomic():
             user = User.objects.create_user(username=account, password=password)
-            UserProfile.objects.create(user=user, grade=grade, grade_date=timezone.localdate())
+            UserProfile.objects.create(user=user, admission_year=year, grade=grade, grade_date=timezone.localdate())
     except IntegrityError:
         return api_error('该账号已存在',409)
     login(request, user)

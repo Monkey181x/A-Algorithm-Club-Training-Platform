@@ -61,7 +61,7 @@ def overlay(request,get_response):
     if path == '/api/showcase' and request.GET.get('all') == '1':
         return None
     combined=path in ('/api/members','/api/leaderboard','/api/dashboard','/api/showcase') or (path=='/api/submissions' and request.GET.get('mine')!='1')
-    detail=bool(re.fullmatch(r'/api/(members/\d+/(history|avatar)|problems/\d+/submissions|attachments/\d+)',path))
+    detail=bool(re.fullmatch(r'/api/(members/\d+/(history|avatar|profile)|problems/\d+/submissions|attachments/\d+)',path))
     if not combined and not detail and path!='/api/semesters':return None
     from .views import membership_for,active_semester,active_week,leaderboard_rows_for
     member=membership_for(request)

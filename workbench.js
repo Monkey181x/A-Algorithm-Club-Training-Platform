@@ -2,9 +2,11 @@ const workbench$ = selector => document.querySelector(selector);
 let workbenchProfile = null;
 let workbenchVersion = 0;
 let workbenchConfirmResolver = null;
+let teamSettingsRequest = 0;
 
 document.querySelector('#adminView').innerHTML = `
-  <div class="page-heading"><div><p class="kicker">团队管理</p><h1>管理工作台</h1><p class="muted" id="workbenchDescription"></p></div><button class="secondary-button" id="refreshReports">刷新工作台</button></div>
+  <div class="page-heading"><div><p class="kicker">MANAGEMENT CENTER</p><h1>管理工作台</h1><p class="muted" id="workbenchDescription"></p></div><button class="secondary-button" id="refreshReports">刷新工作台</button></div>
+  <nav class="workbench-nav" id="wbQuickNav" aria-label="工作台快捷导航"></nav>
   <div class="workbench-scope panel" id="wbManagedScope" hidden><label>当前管理团队 <select id="wbManagedTeam" aria-label="当前管理团队"></select></label></div>
   <section class="panel workbench-panel" id="wbDispatchSection" hidden><div class="panel-heading"><div><p class="section-label">DELIVERY INBOX</p><h2>待派发商品 <span id="wbDispatchCount"></span></h2></div></div><div id="wbDispatchList"></div></section>
   <section class="panel workbench-panel" id="wbParserSection" hidden><div class="panel-heading"><div><p class="section-label">PROBLEM PARSER</p><h2>题目解析与 API 配置</h2></div></div>
@@ -12,7 +14,7 @@ document.querySelector('#adminView').innerHTML = `
     <h3>洛谷提交记录查询</h3><form id="wbLuoguQueryForm" class="workbench-form"><label>全站查询 Cookie<input name="cookie" type="password" autocomplete="new-password" maxlength="8192" placeholder="_uid=…; __client_id=…"><small id="wbLuoguCookieHint"></small></label><label class="workbench-check"><input name="clear_cookie" type="checkbox">清除查询 Cookie</label><div><button class="primary-button" type="submit">保存查询配置</button></div></form><p class="muted">统一用于查询成员的公开提交时间，加密保存；受隐私保护的记录不保证可查询。成员无需填写 Cookie。</p>
   </section>
   <section class="panel workbench-panel" id="wbPendingSection" hidden><div class="panel-heading"><div><p class="section-label">TITLE INBOX</p><h2>待处理题目名称</h2></div></div><div id="wbProblemQueue"></div><button class="secondary-button" id="wbProblemsMore" hidden>加载更多题目</button></section>
-  <section class="workbench-panel" id="wbReportsSection"><div class="panel-heading"><div><p class="section-label">REPORTS</p><h2>举报处理</h2></div><span class="muted" id="wbReportScope"></span></div><div id="reviewList" class="solution-waterfall"></div><button id="reportsMore" class="secondary-button" hidden>加载更多举报</button></section>
+  <section class="panel workbench-panel" id="wbReportsSection"><div class="panel-heading"><div><p class="section-label">REPORTS</p><h2>举报处理</h2></div><span class="muted" id="wbReportScope"></span></div><div id="reviewList" class="solution-waterfall"></div><button id="reportsMore" class="secondary-button" hidden>加载更多举报</button></section>
   <section class="panel workbench-panel" id="wbTeamsSection" hidden><div class="panel-heading"><div><p class="section-label">TEAMS</p><h2>团队配置</h2></div></div>
 <details id="wbCreateSection" class="workbench-details" hidden><summary>创建团队 ＋</summary><form id="wbCreateTeamForm" class="workbench-form"><label>团队名称<input name="team_name" maxlength="80" required></label><label>团队码<input name="team_code" maxlength="32" required></label><p class="muted">学期每年于 2 月 15 日、8 月 1 日自动切换，周次从学期起始周计算。</p><label>每周提交要求<input name="min_submissions" type="number" min="0" max="100000" value="4" required></label><label>每周积分要求<input name="min_score" type="number" min="0" max="100000" value="10" required></label><label>截图积分<input name="screenshot_points" type="number" min="0" max="10000" value="1" required></label><label>题解积分<input name="logic_points" type="number" min="0" max="10000" value="1" required></label><label>Blog积分<input name="blog_points" type="number" min="0" max="10000" value="1" required></label><label class="workbench-check"><input name="require_both" type="checkbox" checked>提交次数和积分均需达标</label><div class="workbench-form-actions"><button class="primary-button" type="submit">创建团队</button></div></form></details>
     <div id="wbTeamGroups"></div>
@@ -57,7 +59,7 @@ async function loadWorkbenchTeams(version = workbenchVersion) {
   if (!workbenchProfile?.site_admin) return;
   const data = await communityRequest('/api/management');
   if (version !== workbenchVersion || currentView !== 'admin') return;
-  workbench$('#wbTeamGroups').innerHTML = data.teams.map(team => `<article class="workbench-team" data-team="${team.id}"><div class="workbench-team-heading"><div><h3>${escapeHtml(team.name)}</h3><small>${escapeHtml(team.code)}</small></div><div class="workbench-row-actions"><button class="text-button" data-team-config="${team.id}">团队配置</button><button class="text-button danger" data-delete-team="${team.id}" data-code="${escapeHtml(team.code)}" data-name="${escapeHtml(team.name)}">删除团队</button></div></div><div class="workbench-team-settings" id="wbTeamSettings${team.id}" hidden></div></article>`).join('') || '<div class="queue-empty">暂无团队，可先创建团队。</div>';
+  workbench$('#wbTeamGroups').innerHTML = data.teams.map(team => `<article class="workbench-team" data-team="${team.id}"><div class="workbench-team-heading"><div><h3>${escapeHtml(team.name)}</h3><small>${escapeHtml(team.code)}</small></div><div class="workbench-row-actions"><button class="text-button" data-team-config="${team.id}">团队配置</button><button class="text-button danger" data-delete-team="${team.id}" data-code="${escapeHtml(team.code)}" data-name="${escapeHtml(team.name)}">删除团队</button></div></div></article>`).join('') || '<div class="queue-empty">暂无团队，可先创建团队。</div>';
 }
 
 async function loadParserConfig(version = workbenchVersion) {
@@ -143,9 +145,11 @@ workbench$('#wbCreateTeamForm').addEventListener('submit', async event => {
   } catch(error) { showToast(error.message); button.disabled = false; }
 });
 async function openTeamSettings(id, force = false) {
-  const host = workbench$('#wbTeamSettings'+id);
-  if (!host.hidden && !force) { host.hidden = true; return; }
+  const version = ++teamSettingsRequest;
   const data = await communityRequest(`/api/management/teams/${id}/settings`);
+  if (version !== teamSettingsRequest) return;
+  const panes = window.TeamManagement.open({...data, id:Number(id)}, force);
+  const host = panes.config;
   const semester = data.semester;
   const datesMarkup=semester ? `<fieldset class="workbench-semester-dates"><legend>当前学期日期</legend><label class="workbench-check"><input name="custom_semester_dates" type="checkbox" ${!semester.calendar_managed?'checked':''}>自定义学期日期</label><div class="workbench-date-fields"><label>开始日期<input name="starts_on" type="date" value="${escapeHtml(semester.starts_on)}" required ${semester.calendar_managed?'disabled':''}></label><label>结束日期<input name="ends_on" type="date" value="${escapeHtml(semester.ends_on)}" required ${semester.calendar_managed?'disabled':''}></label></div><p class="muted">开启后按所选日期显示学期热力图；关闭并保存后恢复自动学期（2月15日、8月1日切换）。日期范围须包含今天，且不能排除已有提交。</p></fieldset>` : '';
   const numeric = [['min_submissions','每周提交要求'],['min_score','每周积分要求'],['screenshot_points','截图积分'],['logic_points','题解积分'],['blog_points','Blog积分']];
@@ -159,12 +163,12 @@ async function openTeamSettings(id, force = false) {
     });
   }
   if (workbenchProfile?.site_admin && window.CurrencyAdminModule) {
-    const currencyPanel=document.createElement('div'); currencyPanel.className='workbench-currency-settings'; host.append(currencyPanel);
+    const currencyPanel=document.createElement('div'); currencyPanel.className='workbench-currency-settings'; panes.currency.replaceChildren(currencyPanel);
     await window.CurrencyAdminModule.renderConfigPanel(currencyPanel,id);
   }
 }
 
-workbench$('#adminView').addEventListener('submit', async event => {
+document.addEventListener('submit', async event => {
   const form = event.target;
   if (!form.dataset.problemTitle && !form.dataset.teamSettingsForm) return;
   event.preventDefault(); const button = event.submitter; button.disabled = true;
@@ -178,12 +182,12 @@ workbench$('#adminView').addEventListener('submit', async event => {
       data.require_both = form.elements.require_both?.checked || false;
       if(form.elements.custom_semester_dates)data.custom_semester_dates=form.elements.custom_semester_dates.checked;
       await communityRequest(`/api/management/teams/${form.dataset.teamSettingsForm}/settings`,workbenchJSON('PUT',data));
-      await loadWorkbenchTeams(); await loadLiveData(); showToast('团队配置已保存');
+      await loadWorkbenchTeams(); await loadLiveData(); await openTeamSettings(form.dataset.teamSettingsForm, true); showToast('团队配置已保存');
     }
   } catch(error) { showToast(error.message); } finally { button.disabled=false; }
 });
 
-workbench$('#adminView').addEventListener('click', async event => {
+document.addEventListener('click', async event => {
   const button = event.target.closest('button'); if (!button) return;
   const data = button.dataset;
   if (!data.deleteTeam && !data.teamConfig && !data.retryProblem && !data.removeProblem && !data.scheduleCleanup && !data.cancelCleanup) return;
@@ -348,3 +352,63 @@ async function loadDispatchInbox(){
   workbench$('#wbDispatchList').innerHTML=result.orders.length?result.orders.map(order=>`<div class="dispatch-row"><div><strong>${escapeHtml(order.item_name)}</strong><small>${order.item_type==='consumable'?'消耗品 · ':''}${escapeHtml(order.team_name||'')} · ${escapeHtml(order.member_name)} · ${new Date(order.purchased_at).toLocaleString('zh-CN')}</small></div><button class="secondary-button" data-deliver="${order.id}">${order.item_type==='consumable'?'确认并标记已消耗':'确认已派发'}</button></div>`).join(''):'<p class="muted">暂无待派发商品</p>';
   section.querySelectorAll('[data-deliver]').forEach(button=>button.onclick=async()=>{const consumable=result.orders.find(order=>String(order.id)===button.dataset.deliver)?.item_type==='consumable';if(!await clubDialog.confirm({title:consumable?'确认消耗品派送':'确认派发',text:consumable?'确认你已完成这件消耗品的派送？确认后将标记为“已消耗”。':'确认你已人工发放这件商品？',confirmText:consumable?'确认已消耗':'确认已派发'}))return;button.disabled=true;try{await communityRequest('/api/currency/admin/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:Number(button.dataset.deliver)})});await loadDispatchInbox();}catch(error){showToast(error.message);button.disabled=false;}});
 }
+
+
+// Shortcuts reflect the sections actually available to the current role.
+(() => {
+  const host = workbench$('#adminView');
+  const nav = workbench$('#wbQuickNav');
+  const entries = [
+    ['wbDispatchSection', '商品派发', '<path d="M3 7h18v14H3zM3 7l9-5 9 5M12 2v19"/>'],
+    ['wbReportsSection', '举报处理', '<path d="M12 3l9 4v5c0 5-9 9-9 9s-9-4-9-9V7zM12 8v5M12 16h.01"/>'],
+    ['wbPendingSection', '题名待办', '<path d="M4 5h16v14H4zM8 9h8M8 13h5"/>'],
+    ['wbTeamsSection', '团队配置', '<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0112 0v3M17 5a3 3 0 010 6M21 21v-3a6 6 0 00-4-5"/>'],
+    ['wbParserSection', '题目解析', '<path d="M8 4L2 12l6 8M16 4l6 8-6 8M14 3l-4 18"/>'],
+    ['wbBackupSection', '备份恢复', '<path d="M4 4h16v16H4zM8 4v6h8V4M8 20v-6h8v6"/>'],
+    ['wbPasswordSection', '账号安全', '<rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 018 0v3M12 14v3"/>'],
+  ];
+  entries.forEach(([id]) => host.append(workbench$('#' + id)));
+  nav.innerHTML = entries.map(([id, label, icon]) => `<a href="#${id}" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>${label}</a>`).join('');
+  const links = [...nav.querySelectorAll('a')];
+  function select(id) {
+    links.forEach(link => {
+      if (link.hash === '#' + id) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    });
+  }
+  function sync() {
+    links.forEach((link, i) => { link.hidden = workbench$('#' + entries[i][0]).hidden; });
+    if (!nav.querySelector('a[aria-current]:not([hidden])')) {
+      const first = links.find(link => !link.hidden);
+      select(first ? first.hash.slice(1) : '');
+    }
+    nav.hidden = links.every(link => link.hidden);
+  }
+  nav.addEventListener('click', event => {
+    const link = event.target.closest('a');
+    if (!link || link.hidden) return;
+    const section = workbench$(link.hash);
+    if (!section || section.hidden) return;
+    event.preventDefault();
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const animationsOff = document.documentElement.dataset.siteMotion === 'off';
+    section.scrollIntoView({block:'start', behavior:reduced || animationsOff ? 'auto' : 'smooth'});
+    select(section.id);
+    const heading = section.querySelector('h2');
+    if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({preventScroll:true}); }
+  });
+  // Watch only visibility, not form fields: editing and async refresh keep focus intact.
+  const visibility = new MutationObserver(sync);
+  entries.forEach(([id]) => visibility.observe(workbench$('#' + id), {attributes:true, attributeFilter:['hidden']}));
+  if ('IntersectionObserver' in window) {
+    const positions = new Map();
+    const observer = new IntersectionObserver(changes => {
+      changes.forEach(entry => positions.set(entry.target.id, entry.isIntersecting));
+      if (!host.classList.contains('active')) return;
+      const visible = entries.find(([id]) => positions.get(id) && !workbench$('#' + id).hidden);
+      if (visible) select(visible[0]);
+    }, {rootMargin:'-90px 0px -50% 0px', threshold:0});
+    entries.forEach(([id]) => observer.observe(workbench$('#' + id)));
+  }
+  sync();
+})();

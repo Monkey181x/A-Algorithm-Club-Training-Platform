@@ -1,5 +1,6 @@
 from django.urls import path
 from . import extension_views
+from . import member_management
 from .activity_views import training_activity
 from . import profile_views
 from . import contest_progress_views
@@ -12,6 +13,11 @@ from .admin_test_mode import toggle as toggle_test_mode
 from . import shop_fulfillment
 
 urlpatterns = [
+    path('auth/registration-options', views.registration_options),
+    path('members/<int:member_id>/profile', profile_views.member_profile),
+    path('management/teams/<int:team_id>/members', member_management.member_list),
+    path('management/teams/<int:team_id>/members/<int:member_id>/settings', member_management.member_settings),
+    path('management/teams/<int:team_id>/members/<int:member_id>/inventory', member_management.inventory_settings),
     path("currency/inventory/<int:unit_id>/redeem", shop_fulfillment.redeem),
     path("currency/inventory/<int:inventory_id>/use", shop_fulfillment.use_consumable),
     path("submissions/<int:submission_id>/reversal-preview", views.submission_reversal_preview),

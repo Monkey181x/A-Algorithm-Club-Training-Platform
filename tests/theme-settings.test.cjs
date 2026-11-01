@@ -58,3 +58,10 @@ test('resetting one mode and one block preserves other custom choices',()=>{
   const s=T.defaults();s.blocks.light.daily={...T.blockDefaults(),enabled:true,background:'#123456'};s.blocks.dark.daily={...T.blockDefaults(),enabled:true,background:'#654321'};
   delete s.blocks.light.daily;const round=T.sanitize(s);assert.equal(round.blocks.light.daily,undefined);assert.equal(round.blocks.dark.daily.background,'#654321');
 });
+
+test('decorative nodes derive a companion color instead of copying the primary accent',()=>{
+ const red=T.companionColor('#d96c75','light'),blue=T.companionColor('#5788c4','light');
+ assert.match(red,/^#[0-9a-f]{6}$/);assert.notEqual(red,'#d96c75');assert.notEqual(red,blue);
+ assert.notEqual(red,T.companionColor('#d96c75','dark'));
+ assert.ok(T.luminance(T.companionColor('#d96c75','dark'))>T.luminance(red));
+});

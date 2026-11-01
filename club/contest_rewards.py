@@ -52,7 +52,7 @@ def reward_for(problem, member, profile=None):
     profile = profile or UserProfile.objects.filter(user=member.user).first()
     level = grade_on(profile, timezone.localtime(contest.starts_at).date())
     if level is None:
-        return 0, '', '注册年级资料缺失，请联系系统管理员核对'
+        return 0, '', '入学年份资料缺失，请联系系统管理员核对'
     group = 'beginner' if level == 0 else 'experienced'
     low, high = THRESHOLDS[contest.platform][group]
     difficulty = difficulty_value(problem.difficulty)

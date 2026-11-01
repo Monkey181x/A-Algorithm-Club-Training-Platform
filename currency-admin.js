@@ -203,8 +203,8 @@ const CurrencyAdminModule = (() => {
           <p class="muted">每天第一次提交的签到奖励；补签不发放每日奖励。</p>
           <h4>自然周连签奖励</h4><p class="muted">周一至周日截断，每个天数档位每周只发放一次；补签会重算原周。</p><div class="currency-streak-rules"></div>
           <button type="button" class="secondary-button" data-add-streak>＋ 添加连签奖励</button>
-          <h4>同步比赛 · 单题奖励</h4><p class="muted">萌新：大一上；老登：大一下及以上。三档按平台题目难度划分；0 表示不奖励。2026-11-01 起的比赛生效；有准确时间时仅正赛时段内 AC 可领奖；已确认 AC 但时间无法核验时，宽松兜底发奖；已知赛外记录不发奖。</p>
-          <div class="problem-reward-grid">${['beginner','experienced'].map(group=>`<fieldset><legend>${group==='beginner'?'萌新':'老登'}</legend>${(config.problem_rewards?.[group] || [1,2,3]).map((amount,index)=>`<label>第 ${index+1} 档 RBC<input type="number" data-problem-reward="${group}" data-tier="${index}" min="0" max="100000" required value="${amount}"></label>`).join('')}</fieldset>`).join('')}</div>
+          <h4>同步比赛 · 单题奖励</h4><p class="muted">小登：入学后的第一个秋季学期；老登：之后学期。三档按平台题目难度划分；0 表示不奖励。2026-11-01 起的比赛生效；有准确时间时仅正赛时段内 AC 可领奖；已确认 AC 但时间无法核验时，宽松兜底发奖；已知赛外记录不发奖。</p>
+          <div class="problem-reward-grid">${['beginner','experienced'].map(group=>`<fieldset><legend>${group==='beginner'?'小登':'老登'}</legend>${(config.problem_rewards?.[group] || [1,2,3]).map((amount,index)=>`<label>第 ${index+1} 档 RBC<input type="number" data-problem-reward="${group}" data-tier="${index}" min="0" max="100000" required value="${amount}"></label>`).join('')}</fieldset>`).join('')}</div>
           <details><summary>平台难度档位说明</summary><p class="muted">力扣：萌新 600 / 1200，老登 1000 / 1500；CF：1000 / 1600、1400 / 2000；AtCoder：400 / 1000、800 / 1600；牛客 Rating：1100 / 1600、1600 / 2100；洛谷难度等级：2 / 4、4 / 6。均按“低于第一界限／低于第二界限／其余”分档。缺少难度时按第一档发奖；不会编造题目 Rating。</p></details>
         </fieldset>
         <div class="workbench-form-actions"><button type="submit" class="primary-button">保存货币配置</button><span class="currency-config-status" role="status"></span></div>

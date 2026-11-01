@@ -216,17 +216,18 @@ function renderLeaderboard(mode='checkin', target='#leaderboardList') {
   if (!el) return;
   const selection = rankingSelection(target);
   const allRows = rankingData[rankingKey(selection.scope,selection.platform,selection.period)];
-  const rows = target === '#leaderboardList' ? allRows?.filter(row => row.isCurrent) : allRows;
+  const query=selection.panel?.querySelector('[data-ranking-search]')?.value||'';
+  const rows = target === '#leaderboardList' ? allRows?.filter(row => row.isCurrent) : allRows?.filter(row=>window.MemberTitles.matchesMember(row,query));
   const filter = selection.panel?.querySelector('.rating-platform-filter:not(.solved-period-filter)');
   const solvedFilter = selection.panel?.querySelector('.solved-period-filter');
   if (solvedFilter) solvedFilter.hidden = selection.scope !== 'solved';
   if (filter) filter.hidden = selection.scope !== 'rating';
   el.innerHTML = !rows ? '<div class="queue-empty" role="status">正在加载榜单…</div>' : !rows.length
-    ? `<div class="queue-empty">${target === '#leaderboardList' ? '你在当前榜单暂无排名' : selection.scope === 'rating' ? '当前团队暂无绑定此平台的成员' : '暂无排行榜数据'}</div>`
+    ? `<div class="queue-empty">${target === '#leaderboardList' ? '你在当前榜单暂无排名' : query.trim() ? '没有匹配的成员或分队' : selection.scope === 'rating' ? '当前团队暂无绑定此平台的成员' : '暂无排行榜数据'}</div>`
     : rows.map(row => `
-      <button type="button" class="leader-row ${row.isCurrent ? 'you' : ''}" data-ranking-member="${row.memberId}" aria-label="查看${escapeHtml(uiMemberName(row.name))}的历史提交">
+      <button type="button" class="leader-row ${row.isCurrent ? 'you' : ''}" data-ranking-member="${row.memberId}" aria-label="查看${escapeHtml(uiMemberName(row.name))}的个人信息">
         <span class="leader-rank ${row.rank && row.rank <= 3 ? 'top' : ''}">${row.rank || '—'}</span>
-        <span class="leader-member">${memberAvatar(row.memberId,row.name,'leader-avatar',row.avatar)}<span class="leader-name">${escapeHtml(uiMemberName(row.name))}${row.isCurrent ? '（你）' : ''}</span></span>
+        <span class="leader-member"><span class="leader-avatar-stack">${memberAvatar(row.memberId,row.name,'leader-avatar',row.avatar)}${window.MemberTitles?.cohort(row.cohort,true)||''}</span><span class="leader-name">${window.MemberTitles?.list(row.titles||row.title)||''}${escapeHtml(uiMemberName(row.name))}${row.isCurrent ? '（你）' : ''}</span></span>
         <span class="leader-score">${row.value ?? '—'}<small> ${escapeHtml(row.unit)}</small></span>
         <span class="leader-count">${escapeHtml(row.detail)}${row.value === null ? ' · 暂无评级' : ''}</span>
       </button>`).join('');
@@ -236,6 +237,9 @@ function renderLeaderboard(mode='checkin', target='#leaderboardList') {
     if ($('#yourRankChange')) $('#yourRankChange').textContent = {checkin:'当前连续签到',rating:'平台已同步 Rating',solved:'累计过题',wealth:'当前 Coins 余额'}[selection.scope];
   }
 }
+
+document.addEventListener('input',event=>{if(event.target.matches('[data-ranking-search]')){const panel=event.target.closest('.full-leaderboard');panel.querySelector('[data-ranking-search-clear]').hidden=!event.target.value;renderLeaderboard(undefined,'#leaderboardListFull');}});
+document.addEventListener('click',event=>{const button=event.target.closest('[data-ranking-search-clear]');if(button){const input=button.closest('.ranking-search').querySelector('input');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();}});
 
 function setView(view, {preserveContent=false}={}) {
   if (view === 'rbcshop' && !window.CurrencyModule?.getCurrencyData().enabled) view = 'dashboard';
@@ -982,8 +986,8 @@ function openReview(key, returnToHistory = false) {
   reviewReturnsToHistory = returnToHistory;
   const closeControl = $('#closeReview');
   closeControl.innerHTML = returnToHistory ? '<svg class="ui-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m15 5-7 7 7 7"/></svg>' : '×';
-  closeControl.setAttribute('aria-label', returnToHistory ? '返回历史提交' : '关闭');
-  closeControl.title = returnToHistory ? '返回历史提交' : '关闭';
+  closeControl.setAttribute('aria-label', returnToHistory ? '返回个人信息' : '关闭');
+  closeControl.title = returnToHistory ? '返回个人信息' : '关闭';
   activeReviewKey = key;
   activeSubmissionId = data.submissionId || null;
   const ownRecord = key.startsWith('mine-') ? ownRecords.get(Number(data.submissionId)) : null;
@@ -1437,106 +1441,100 @@ clearStaticPreview(); loadLiveData();
 const historyModal = $('#memberHistoryModal');
 let activeHistoryMemberId = null;
 let historyFromMemberList = false;
-function updateHistorySelect(select, options, value) {
-  const selected = options.some(option => option.value === String(value)) ? String(value) : options[0]?.value || '';
-  if (select.tomselect) {
-    select.tomselect.clear(true);
-    select.tomselect.clearOptions();
-    select.tomselect.addOptions(options);
-    select.tomselect.setValue(selected, true);
-    select.tomselect.refreshOptions(false);
-  } else {
-    select.innerHTML = options.map(option => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.text)}</option>`).join('');
-    select.value = selected;
-    if (window.TomSelect) new TomSelect(select, {
-      create:false, maxItems:1, controlInput:null, searchField:[],
-      onInitialize() {
-        this.wrapper.classList.add('history-select', select.id === 'historySemester' ? 'history-semester-select' : 'history-week-select');
-        this.control.setAttribute('aria-label', select.id === 'historySemester' ? '选择学期' : '选择周次');
-      }
-    });
-  }
-}
+let memberProfileNextPage = null;
+let memberProfileBusy = false;
+let memberProfileReturnFocus = null;
 function openMemberHistory(key) {
-  historyFromMemberList = currentView === 'members';
-  if (/^\d+$/.test(String(key))) { activeHistoryMemberId = Number(key); openLiveMemberHistory(Number(key)); return; }
-  showToast('请从真实成员列表打开历史提交');
+  if (!/^\d+$/.test(String(key))) { showToast('请从成员列表打开个人信息'); return; }
+  historyFromMemberList = true;
+  activeHistoryMemberId = Number(key);
+  memberProfileReturnFocus = document.activeElement;
+  openLiveMemberHistory(Number(key));
 }
-async function openLiveMemberHistory(memberId) {
+function memberPlatformCards(payload) {
+  const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
+  const bindings = new Map((payload.bindings || []).map(binding => [binding.platform,binding]));
+  $('#memberPlatformGrid').innerHTML = Object.entries(payload.platforms).map(([platform,meta]) => {
+    const binding = bindings.get(platform), stats = binding?.snapshot || {};
+    const history = Array.isArray(stats.rating_history) ? stats.rating_history : [];
+    let homepage = '';
+    try { const url = new URL(stats.profile_url); if (url.protocol === 'https:') homepage = url.href; } catch (_) {}
+    const status = !binding ? '未绑定' : binding.status === 'pending' ? '同步中' : binding.status === 'failed' ? '同步未完成' : '已绑定';
+    return `<article class="member-platform-card" data-platform="${escapeHtml(platform)}"><div class="member-platform-head"><span class="member-platform-mark">${escapeHtml(meta.short)}</span><div><h4>${escapeHtml(meta.name)}</h4><small>${escapeHtml(binding?.account || '暂未绑定账号')}</small></div><span class="member-platform-state">${status}</span></div>${binding ? `<details class="member-platform-details"><summary><span>数据概览</span><small>${number(stats.rating)} Rating · 通过 ${number(stats.solved)}</small><svg class="member-disclosure-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><div class="member-platform-metrics"><div><span>当前 Rating</span><strong>${number(stats.rating)}</strong></div><div><span>最高 Rating</span><strong>${number(stats.max_rating)}</strong></div><div><span>${escapeHtml(stats.solved_label || '通过题数')}</span><strong>${number(stats.solved)}</strong></div></div><div class="member-platform-extra">${stats.rank ? `<span>${escapeHtml(stats.rank)}</span>` : ''}${typeof stats.contests==='number'?`<span>${number(stats.contests)} 场 Rated 比赛</span>`:''}${(Array.isArray(stats.difficulty)?stats.difficulty:[]).map(item=>`<span>${escapeHtml(item.label)} ${number(item.count)}</span>`).join('')}</div>${history.length?`<details class="member-rating-history"><summary><span>近期比赛</span><small>${history.length} 场</small><svg class="member-disclosure-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><ol>${history.slice(-20).reverse().map(item=>`<li><span>${escapeHtml(item.name)}</span><strong>${number(item.rating)}</strong></li>`).join('')}</ol></details>`:''}${(Array.isArray(stats.notes)?stats.notes:[]).map(note=>`<p class="muted member-platform-note">${escapeHtml(note)}</p>`).join('')}<div class="member-platform-footer"><small>${binding.synced_at?'更新于 '+escapeHtml(new Date(binding.synced_at).toLocaleString('zh-CN')):'暂无同步数据'}</small>${homepage?`<a href="${escapeHtml(homepage)}" target="_blank" rel="noopener noreferrer">平台主页 ↗</a>`:''}</div></details>`:''}</article>`;
+  }).join('');
+}
+function renderMemberRecent(items, append = false) {
+  const list = $('#historyList');
+  if (!append) list.innerHTML = '';
+  for (const item of items) {
+    const key = `history-${item.id}`;
+    if (append && list.querySelector(`[data-member-submission="${item.id}"]`)) continue;
+    const proof = item.parts.find(part=>part.kind==='proof');
+    const logic = item.parts.find(part=>part.kind==='logic');
+    const blog = item.parts.find(part=>part.kind==='blog');
+    reviewData[key] = {name:item.member_name,initial:item.member_name.slice(0,1),time:new Date(item.submitted_at).toLocaleString('zh-CN'),logic:logic?.text || '未提交题解思路。',status:'approved',submissionId:item.id,memberId:item.member_id,problemTitle:item.problem_title || '',problemUrl:item.problem_url || '',upload:proof?.upload,fileName:'通过截图',blog:blog?.text || '',code:item.parts.find(part=>part.kind==='code')?.text || ''};
+    const points = item.parts.reduce((sum,part)=>sum+(part.points || 0),0);
+    list.insertAdjacentHTML('beforeend',`<article class="history-item" data-member-submission="${item.id}"><div class="history-item-icon approved">✓</div><div class="member-recent-copy"><strong>${escapeHtml(uiProblemTitle(item.problem_title || '题目记录'))}</strong><small>${escapeHtml(item.semester_name)} · 第 ${item.week} 周 · 提交于 ${escapeHtml(new Date(item.submitted_at).toLocaleString('zh-CN'))}</small></div><span>${points} 分</span><button class="history-view secondary-button" type="button" data-review="${key}">查看内容</button></article>`);
+  }
+  if (!list.children.length) list.innerHTML='<div class="queue-empty">暂无公开提交记录</div>';
+}
+async function openLiveMemberHistory(memberId, page = 1) {
   const requestVersion = ++historyRequestVersion;
+  memberProfileBusy = true;
+  if (page === 1) {
+    $('#historyMember').textContent = '正在读取个人信息…';
+    $('#historyIdentity').textContent=''; $('#historyMemberTitle').innerHTML=''; $('#historySquad').innerHTML=''; $('#historyMemberSummary').textContent=''; $('#historyAvatar').replaceChildren();
+    $('#memberPlatformGrid').innerHTML='<p class="muted">正在加载平台数据…</p>';
+    $('#historyList').innerHTML=''; $('#memberRecentTotal').textContent='';
+    memberProfileNextPage=null; $('#memberRecentMore').hidden=true;
+    historyModal.classList.add('open'); historyModal.setAttribute('aria-hidden','false');
+    $('.member-profile-scroll',historyModal).scrollTop=0; $('#closeHistory').focus();
+  }
+  $('#memberRecentMore').disabled = true;
   try {
-    let semesterSelect = $('#historySemester');
-    if (!semesterSelect) {
-      semesterSelect = document.createElement('select'); semesterSelect.id = 'historySemester'; semesterSelect.setAttribute('aria-label', '选择学期');
-      $('#historyWeek').before(semesterSelect);
-      semesterSelect.addEventListener('change', () => { semesterSelect.dataset.weeksFor = ''; if (activeHistoryMemberId) openLiveMemberHistory(activeHistoryMemberId); });
-    }
-    const semesterResponse = await clubApi.request('/api/semesters');
-    if (requestVersion !== historyRequestVersion) return;
-    if (!semesterResponse.ok) throw new Error('学期加载失败');
-    const semesterList = (await semesterResponse.json()).semesters || [];
-    if (requestVersion !== historyRequestVersion) return;
-    const selected = semesterSelect.value;
-    updateHistorySelect(semesterSelect, semesterList.map(item => ({value:String(item.id),text:`${item.name}${item.archived ? '（已归档）' : ''}`})), selected);
-    const semester = semesterList.find(item => String(item.id) === semesterSelect.value);
-    if (semester) {
-      const previousWeek = $('#historyWeek').value;
-      updateHistorySelect($('#historyWeek'), [...semester.weeks].sort((a,b) => b-a).map(number => ({value:String(number),text:`第 ${number} 周`})), previousWeek);
-      semesterSelect.dataset.weeksFor = String(semester.id);
-    }
-    const week = $('#historyWeek').value;
-    const response = await clubApi.request(`/api/members/${memberId}/history?week=${week}${semester ? `&semester=${semester.id}` : ''}`);
-    if (requestVersion !== historyRequestVersion) return;
-    if (!response.ok) { showToast('当前权限无法查看该成员材料'); return; }
+    const response = await clubApi.request(`/api/members/${memberId}/profile?page=${page}`);
     const payload = await response.json();
     if (requestVersion !== historyRequestVersion) return;
-    $('#historyMember').textContent = payload.member.name;
-    setDetailAvatar($('#historyAvatar'),memberId,payload.member.name);
-    const submissions = payload.submissions || [];
-    $('#historyList').innerHTML = submissions.length ? submissions.map((item) => {
-      const key = `history-${item.id}`;
-      const proof = item.parts.find((part) => part.kind === 'proof');
-      const logic = item.parts.find((part) => part.kind === 'logic');
-      const blog = item.parts.find((part) => part.kind === 'blog');
-      const reviewStatus = item.parts.some((part) => part.status === 'pending') ? 'pending' : item.parts.some((part) => part.status === 'approved') ? 'approved' : 'rejected';
-      reviewData[key] = {name:item.member_name, initial:item.member_name.slice(0,1), time:new Date(item.submitted_at).toLocaleString('zh-CN'), logic:logic?.text || '未提交题解思路。', visibility:item.visibility || 'team', status:reviewStatus, submissionId:item.id, memberId:item.member_id, problemTitle:item.problem_title || '', problemUrl:item.problem_url || '', upload:proof?.upload, fileName:'通过截图', blog:blog?.text || '', code:item.parts.find(part=>part.kind==='code')?.text || ''};
-      const points = item.parts.reduce((sum, part) => sum + (part.points || 0), 0);
-      const iconStatus = reviewStatus === 'approved' ? 'approved' : reviewStatus === 'rejected' ? 'pending' : 'pending';
-      const icon = reviewStatus === 'approved' ? '✓' : reviewStatus === 'rejected' ? '!' : '◷';
-      return `<div class="history-item"><div class="history-item-icon ${iconStatus}">${icon}</div><div><strong>第 ${item.week} 周提交</strong><small>归属 ${escapeHtml(item.record_date || '')} · ${new Date(item.submitted_at).toLocaleString('zh-CN')}</small></div><span>${points} 分</span><button class="history-view" type="button" data-review="${key}">查看内容</button></div>`;
-    }).join('') : '<div class="queue-empty">该周暂无提交记录</div>';
-    $$('.history-view', $('#historyList')).forEach((button) => button.addEventListener('click', () => { closeMemberHistory(); openReview(button.dataset.review, historyFromMemberList); }));
-    $('#historyScore').textContent = `${payload.summary?.score || 0} 分`;
-    $('#historyCount').textContent = `${payload.summary?.submissions || 0} 次`;
-    const historyStatus = $('.history-summary > div:last-child strong');
-    if (historyStatus && payload.summary?.qualified !== null && payload.summary?.qualified !== undefined) {
-      historyStatus.textContent = payload.summary.qualified ? '已达标' : '未达标';
-      historyStatus.className = payload.summary.qualified ? 'positive' : 'pending-text';
+    if (!response.ok) throw new Error(payload.error || '无法查看该成员个人信息');
+    if (page===1) {
+      $('#historyMember').textContent = payload.member.name;
+      $('#historyMemberTitle').innerHTML=MemberTitles.list(payload.member.titles||payload.member.title);
+      $('#historySquad').innerHTML=MemberTitles.cohort(payload.member.cohort);
+      $('#historyMemberSummary').textContent=`已绑定 ${payload.bindings.length} / 5 个平台 · ${payload.total} 条提交`;
+      $('#historyIdentity').textContent = [payload.member.role==='admin'?'团队管理员':'普通成员',payload.member.grade_label].filter(Boolean).join(' · ');
+      setDetailAvatar($('#historyAvatar'),memberId,payload.member.name,payload.member.avatar);
+      memberPlatformCards(payload);
     }
-    $('#historyWeek').disabled = Boolean(payload.archived);
-    if ($('#historyWeek').tomselect) $('#historyWeek').tomselect[payload.archived ? 'disable' : 'enable']();
-    $('.history-summary > div:first-child span').textContent = payload.archived ? '学期累计积分' : '本周积分';
-    const subtitle = $('.history-author small');
-    if (subtitle) subtitle.textContent = payload.archived ? `${payload.semester.name} · 已归档` : '';
-    if (payload.archived) {
-      $('#historyList').innerHTML = '<div class="queue-empty">该学期已归档，仅保留累计统计，提交明细已清理。</div>';
-      if (historyStatus) { historyStatus.textContent = `${payload.summary?.qualifiedWeeks || 0} 周达标`; historyStatus.className = 'positive'; }
-    } else if (historyStatus && payload.summary?.qualified == null) {
-      historyStatus.textContent = '—';
+    renderMemberRecent(payload.submissions || [],page>1);
+    $('#memberRecentTotal').textContent=`共 ${payload.total} 条`;
+    memberProfileNextPage=payload.next_page;
+    $('#memberRecentMore').hidden=!memberProfileNextPage;
+  } catch(error) {
+    if (requestVersion===historyRequestVersion) {
+      if(page===1) { $('#historyMember').textContent='个人信息暂不可用'; $('#memberPlatformGrid').textContent=error.message; }
+      showToast(error.message || '个人信息加载失败');
     }
-    historyModal.classList.add('open');
-    historyModal.setAttribute('aria-hidden','false');
-  } catch (error) { showToast('历史提交加载失败'); }
+  } finally {
+    if (requestVersion===historyRequestVersion) { memberProfileBusy=false; $('#memberRecentMore').disabled=false; }
+  }
 }
-function closeMemberHistory() { historyModal.classList.remove('open'); historyModal.setAttribute('aria-hidden','true'); }
-$$('.member-history-button').forEach((button) => button.addEventListener('click', () => openMemberHistory(button.dataset.memberHistory)));
-$('#closeHistory').addEventListener('click', closeMemberHistory);
-
-$('#historyWeek').addEventListener('change', (event) => { if (activeHistoryMemberId) openLiveMemberHistory(activeHistoryMemberId); else showToast(`已切换到第 ${event.target.value.padStart(2,'0')} 周历史提交`); });
-$$('.history-view').forEach((button) => button.addEventListener('click', () => {
-  closeMemberHistory();
-  openReview(button.dataset.review, historyFromMemberList);
-}));
+function closeMemberHistory() {
+  historyRequestVersion++; memberProfileBusy=false;
+  historyModal.classList.remove('open'); historyModal.setAttribute('aria-hidden','true');
+  if (memberProfileReturnFocus?.isConnected) memberProfileReturnFocus.focus();
+}
+$('#closeHistory').addEventListener('click',closeMemberHistory);
+$('#memberRecentMore').addEventListener('click',()=>{ if(memberProfileNextPage&&!memberProfileBusy) openLiveMemberHistory(activeHistoryMemberId,memberProfileNextPage); });
+$('#historyList').addEventListener('click',event=>{ const button=event.target.closest('[data-review]'); if(button){closeMemberHistory();openReview(button.dataset.review,true);} });
+document.addEventListener('keydown',event=>{
+  if(!historyModal.classList.contains('open'))return;
+  if(event.key==='Escape'){event.preventDefault();closeMemberHistory();return;}
+  if(event.key!=='Tab')return;
+  const controls=[...historyModal.querySelectorAll('button:not(:disabled),a[href],summary')].filter(el=>el.getClientRects().length);
+  const first=controls[0],last=controls.at(-1);
+  if(event.shiftKey&&(document.activeElement===first||!historyModal.contains(document.activeElement))){event.preventDefault();last?.focus();}
+  else if(!event.shiftKey&&(document.activeElement===last||!historyModal.contains(document.activeElement))){event.preventDefault();first?.focus();}
+});
 
 $('#memberSearch').addEventListener('input', (event) => {
   $('#memberSearchClear').hidden = !event.target.value;
