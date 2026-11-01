@@ -77,6 +77,7 @@ class TeamMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="team_memberships")
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="memberships")
     display_name = models.CharField(max_length=40)
+    member_title = models.JSONField(default=list, blank=True)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=MEMBER)
     is_active = models.BooleanField(default=True)
     joined_at = models.DateTimeField(auto_now_add=True)
@@ -564,6 +565,7 @@ class ShopCode(models.Model):
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='personal_profile')
+    admission_year = models.PositiveSmallIntegerField(null=True, blank=True)
     avatar = models.ImageField(upload_to='avatars/', blank=True)
     grade = models.PositiveSmallIntegerField(null=True, blank=True)
     grade_date = models.DateField(null=True, blank=True)

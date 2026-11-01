@@ -1,6 +1,7 @@
 """Durable retirement subsidy: once per account in each eligible team."""
 from django.contrib.auth.models import User
 from django.db import transaction
+from django.db.models import Q
 
 from .grades import grade_on, is_retired
 from .models import CurrencyTransaction, RetirementSubsidy, TeamMembership, UserProfile
@@ -29,7 +30,7 @@ def ensure_retirement_subsidies(user_id):
 
 def sync_retirement_subsidies():
     granted, failed = 0, []
-    profiles = UserProfile.objects.filter(grade__isnull=False, user__is_active=True,
+    profiles = UserProfile.objects.filter(Q(grade__isnull=False)|Q(admission_year__isnull=False), user__is_active=True,
                                          user__is_superuser=False).iterator()
     for profile in profiles:
         if grade_on(profile) != 4:

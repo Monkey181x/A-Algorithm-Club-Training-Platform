@@ -50,6 +50,8 @@ urlpatterns = [
     path("team-select.html", lambda request: frontend_asset(request, "team-select.html")),
     path("team-select.js", lambda request: frontend_asset(request, "team-select.js")),
     path("manage.html", lambda request: HttpResponseRedirect("/?view=admin")),
+    path("styles/member-profile.css", lambda request: frontend_asset(request, "styles/member-profile.css")),
+    path("styles/workbench.css", lambda request: frontend_asset(request, "styles/workbench.css")),
     path("workbench.js", lambda request: frontend_asset(request, "workbench.js")),
     path("create-team.html", lambda request: HttpResponseRedirect("/?view=admin")),
     path("join-team.html", lambda request: frontend_asset(request, "join-team.html")),

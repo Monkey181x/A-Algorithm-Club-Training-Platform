@@ -16,6 +16,8 @@ from .models import FileDeletion, PlatformBinding, UserProfile, TeamMembership
 from .views import api_login_required, api_error, body, membership_for
 from .platform_sync import PLATFORMS, validate_account
 from . import avatar_images
+from .member_titles import title_data, titles_data
+from .grades import cohort_data
 
 
 def avatar_url(user, size='large'):
@@ -48,8 +50,8 @@ def profile_data(request):
     from .grades import grade_on, GRADES
     personal = UserProfile.objects.filter(user=request.user).first()
     grade = grade_on(personal)
-    return {'name': member.display_name, 'account': request.user.username,
-            'grade': grade, 'grade_label': GRADES[grade] if grade is not None else '注册资料缺失，请联系管理员',
+    return {'name': member.display_name, 'account': request.user.username, 'title':title_data(member), 'titles':titles_data(member),
+            'cohort':cohort_data(personal), 'grade': grade, 'grade_label': GRADES[grade] if grade is not None else '注册资料缺失，请联系管理员',
             'grade_options': GRADES,
             'team_name': member.team.name, 'avatar': avatar_images.url_for(personal),
             'avatar_small': avatar_images.url_for(personal, member.pk, 'small'),
@@ -64,6 +66,56 @@ def eligible(request):
 
 
 @api_login_required
+@require_http_methods(['GET'])
+def member_profile(request, member_id):
+    """Read-only same-team profile, using saved public platform snapshots."""
+    from django.core.paginator import Paginator, InvalidPage
+    from .models import Submission, SubmissionPart
+    from .views import serialize_submission
+    from .grades import grade_on, GRADES
+    viewer = membership_for(request)
+    if not viewer:
+        return api_error('请先加入团队',403)
+    target = TeamMembership.objects.filter(pk=member_id, team=viewer.team,
+        is_active=True, user__is_active=True, user__is_superuser=False).select_related('user').first()
+    if not target:
+        return api_error('成员不存在',404)
+    # Never expose private sandbox users to ordinary members.
+    if target.user.first_name == 'CLUB_TEST_SANDBOX' and target.user_id != request.user.pk:
+        return api_error('成员不存在',404)
+    personal = UserProfile.objects.filter(user=target.user).first()
+    grade = grade_on(personal)
+    allowed = {'rating','max_rating','solved','solved_label','rank','contests',
+               'difficulty','rating_history','notes','profile_url'}
+    bindings = [{'platform':b.platform, 'account':b.account, 'status':b.status,
+        'synced_at':b.synced_at.isoformat() if b.synced_at else None,
+        'snapshot':{key:value for key,value in (b.snapshot if isinstance(b.snapshot,dict) else {}).items() if key in allowed}}
+        for b in target.user.platform_bindings.filter(platform__in=PLATFORMS)]
+    query = Submission.objects.filter(member=target,team=viewer.team,is_valid=True,
+        semester__archived_at__isnull=True).select_related('week','semester','problem','member').prefetch_related('parts').order_by('-submitted_at','-pk')
+    try:
+        page = Paginator(query,20).page(request.GET.get('page','1'))
+    except InvalidPage:
+        return api_error('提交页码无效')
+    records = []
+    for submission in page:
+        record = serialize_submission(submission,parts=[p for p in submission.parts.all() if p.status==SubmissionPart.APPROVED])
+        for key in ('can_edit','can_delete','can_resubmit'):
+            record[key] = False
+        record['rejection_note'] = ''
+        for part in record['parts']:
+            part['note'] = ''
+        records.append(record)
+    response = JsonResponse({'member':{'id':target.pk,'name':target.display_name,'role':target.role,'title':title_data(target),'titles':titles_data(target),'cohort':cohort_data(personal),
+        'grade_label':GRADES[grade] if grade is not None else '',
+        'avatar':avatar_images.url_for(personal,target.pk,'small')},
+        'platforms':PLATFORMS,'bindings':bindings,'submissions':records,
+        'next_page':page.next_page_number() if page.has_next() else None,'total':page.paginator.count})
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@api_login_required
 @require_http_methods(['GET', 'POST'])
 def profile(request):
     member = eligible(request)
@@ -73,8 +125,8 @@ def profile(request):
         return api_error('请先加入团队后管理个人资料', 403)
     if request.method == 'GET':
         return JsonResponse(profile_data(request))
-    if 'grade' in request.POST:
-        return api_error('年级仅可在注册时选择',400)
+    if 'grade' in request.POST or 'admission_year' in request.POST:
+        return api_error('入学年份仅在注册时选择，修改请联系管理员',400)
     name = request.POST.get('name', member.display_name).strip()
     if not name or len(name) > 40:
         return api_error('昵称需为 1–40 个字符', 400)

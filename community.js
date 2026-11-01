@@ -38,11 +38,11 @@ function cancelSubmissionEdit(){
  const state=submissionEditReturnState;submissionEditReturnState=null;
  closeModal();editingSubmission=null;resubmitting=null;resetSubmissionForm();restoreEditReturn(state);
 }
-function setDetailAvatar(holder,id,name){
+function setDetailAvatar(holder,id,name,explicitSource=undefined){
  holder.textContent=(name||'').slice(0,1);holder.classList.add('synced-member-avatar');
   delete holder.dataset.avatarMember;
  if(!id)return;holder.dataset.avatarMember=String(id);
- const source=memberAvatarSource(id);if(!source)return;
+ const source=explicitSource===undefined?memberAvatarSource(id):explicitSource;if(!source)return;
  holder.dataset.avatarFallback=(name||'').slice(0,1);
  const image=document.createElement('img');image.src=source;image.alt='';image.decoding='async';
  image.onload=()=>{if(image.parentElement===holder)holder.replaceChildren(image);};

@@ -4,6 +4,8 @@ from collections import defaultdict
 from datetime import timedelta
 from django.utils import timezone
 from .models import TeamMembership, CheckinRecord, Submission, PlatformBinding, CurrencyBalance
+from .member_titles import title_data, titles_data
+from .grades import cohort_data
 
 RATING_PLATFORMS = {
     'codeforces':'Codeforces', 'atcoder':'AtCoder', 'nowcoder':'牛客', 'luogu':'洛谷',
@@ -23,7 +25,7 @@ def ranking_data(member, scope, platform='codeforces', period='semester'):
     if scope == 'wealth':
         from .grades import grade_on
         members = [m for m in members if grade_on(profiles.get(m.user_id)) != 4]
-    rows = {m.pk: {'memberId':m.pk, 'name':m.display_name, 'isCurrent':m.pk==member.pk,
+    rows = {m.pk: {'memberId':m.pk, 'name':m.display_name, 'title':title_data(m), 'titles':titles_data(m), 'cohort':cohort_data(profiles.get(m.user_id)), 'isCurrent':m.pk==member.pk,
         'avatar':url_for(profiles.get(m.user_id), m.pk, 'small')} for m in members}
     if scope == 'checkin':
         days = defaultdict(set)

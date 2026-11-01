@@ -48,6 +48,8 @@
   }
   function renderGrade() {
     page.querySelector('#personalGrade').textContent = data.grade_label;
+    page.querySelector('#personalCohort').innerHTML=window.MemberTitles?.cohort(data.cohort)||'';
+    page.querySelector('#personalMemberTitle').innerHTML=window.MemberTitles?.list(data.titles||data.title)||'';
   }
   function buildPage() {
     page = document.createElement('section'); page.id = 'personalPage'; page.className = 'personal-page';
@@ -64,7 +66,7 @@
             <div class="personal-section-copy"><span class="personal-step">01 / ABOUT YOU</span><h2 id="basicsTitle">基本资料</h2><p id="personalAccount"></p></div>
             <form id="personalForm" class="personal-form">
               <div class="personal-avatar-field"><span id="personalAvatar" class="personal-avatar"></span><label class="avatar-picker">更换头像<input id="personalAvatarFile" name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></label><small>PNG / JPEG / WebP · 最大 3 MB</small></div>
-              <div class="personal-name-field"><div class="personal-identity-row"><label class="personal-inline-field" for="personalName"><span>昵称</span><input id="personalName" name="name" required maxlength="40" autocomplete="nickname"></label><div class="personal-inline-field"><span id="personalGradeLabel">年级</span><output id="personalGrade" aria-labelledby="personalGradeLabel"></output></div></div><button type="submit" class="primary-button">保存个人资料</button></div>
+              <div class="personal-name-field"><div class="personal-identity-row"><label class="personal-inline-field" for="personalName"><span>昵称</span><input id="personalName" name="name" required maxlength="40" autocomplete="nickname"></label><div class="personal-inline-field"><span id="personalGradeLabel">年级</span><output id="personalGrade" aria-labelledby="personalGradeLabel"></output></div></div><div id="personalCohort"></div><div id="personalMemberTitle" class="member-title-row"></div><button type="submit" class="primary-button">保存个人资料</button></div>
             </form>
           </section>
           <section class="personal-basics personal-password" aria-labelledby="passwordTitle"><div><h2 id="passwordTitle">修改密码</h2><p class="muted">验证当前密码后设置新密码。</p></div><form id="personalPasswordForm" class="personal-name-field"><label>当前密码<input type="password" name="old_password" autocomplete="current-password" required></label><label>新密码<input type="password" name="new_password" autocomplete="new-password" minlength="8" maxlength="128" required></label><label>确认新密码<input type="password" name="confirm_password" autocomplete="new-password" minlength="8" maxlength="128" required></label><button type="submit" class="primary-button">修改密码</button><p id="passwordMessage" role="status"></p></form></section>

@@ -26,8 +26,8 @@
     const glowGrad = document.createElementNS('http://www.w3.org/2000/svg', 'radialGradient');
     glowGrad.setAttribute('id', 'atlasGlow');
     glowGrad.innerHTML = `
-      <stop offset="0%" style="stop-color:#245EC0;stop-opacity:0.8"/>
-      <stop offset="100%" style="stop-color:#245EC0;stop-opacity:0"/>
+      <stop offset="0%" style="stop-color:var(--site-companion,#559b8a);stop-opacity:0.8"/>
+      <stop offset="100%" style="stop-color:var(--site-companion,#559b8a);stop-opacity:0"/>
     `;
     defs.appendChild(glowGrad);
 
@@ -107,7 +107,7 @@
       inner.setAttribute('cx', x);
       inner.setAttribute('cy', y);
       inner.setAttribute('r', size);
-      inner.setAttribute('fill', '#245EC0');
+      inner.setAttribute('fill', 'var(--site-companion,#559b8a)');
 
       // Pulse animation
       const pulseOuter = document.createElementNS('http://www.w3.org/2000/svg', 'animate');

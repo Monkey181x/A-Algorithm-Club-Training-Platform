@@ -827,3 +827,18 @@ html:root body :is(#openSubmission,#openSubmissionSecondary).primary-button:disa
 #cardSourceFields .form-group{margin-bottom:16px;}#cardSourceFields textarea{width:100%;min-height:130px;box-sizing:border-box;font-family:Consolas,monospace;white-space:pre;border-radius:var(--site-inner-radius,12px);padding:10px;}#cardSourceFields small{display:block;line-height:1.6;margin-top:6px;overflow-wrap:anywhere;}
 html[data-site-theme-active="true"] #cardSourceFields :is(textarea,select){background:var(--site-fill)!important;color:var(--site-text)!important;border-color:var(--site-border)!important;}
 @media(max-width:600px){.dispatch-row{align-items:flex-start;flex-direction:column;}}
+/* Segmented mode controls share one moving thumb instead of separate button fills. */
+html body #settingsView .settings-mode-tabs { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 4px; min-height: 44px; border-radius: 999px; isolation: isolate; }
+html body #settingsView .settings-mode-tabs .settings-mode-indicator { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); border-radius: 999px; background: var(--site-selected,var(--settings-surface)); border: 1px solid var(--settings-line); transform: translateX(calc(var(--switch-index,0) * 100%)); pointer-events: none; z-index: 0; }
+html body #settingsView .settings-mode-tabs button { position: relative; z-index: 1; margin: 0; padding: 8px 14px; border-radius: 999px; background: transparent !important; box-shadow: none; color: var(--settings-secondary); }
+html[data-site-theme-active="true"] body #settingsView .settings-mode-tabs button[aria-pressed="true"], html body #settingsView .settings-mode-tabs button[aria-pressed="true"] { background: transparent !important; box-shadow: none; color: var(--site-accent,var(--settings-text)); font-weight: 700; }
+.settings-surface-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-bottom: 1px solid var(--settings-line); color: var(--settings-text); }
+html body #settingsView .settings-surface-row .settings-mode-tabs { width: 220px; margin: 0; flex: none; }
+html[data-site-theme-active="true"] body .auth-story { padding: clamp(26px,4vw,44px); color: var(--site-text); }
+html[data-site-theme-active="true"] body .auth-story::before { display: none; }
+html[data-site-theme-active="true"] body .auth-story::after { border-color: color-mix(in srgb,var(--site-companion,var(--site-accent)) 45%,transparent); box-shadow: 0 0 0 24px color-mix(in srgb,var(--site-companion,var(--site-accent)) 8%,transparent),0 0 0 48px color-mix(in srgb,var(--site-companion,var(--site-accent)) 4%,transparent); }
+html[data-site-theme-active="true"] body .auth-story h1 { color: var(--site-text); }
+html[data-site-theme-active="true"] body .auth-story p { color: var(--site-secondary); }
+html[data-site-theme-active="true"] body .auth-story-label { color: var(--site-accent); }
+html[data-site-theme-active="true"] body .auth-story-stat span { background: var(--site-selected); color: var(--site-text); border-color: var(--site-border); }
+@media(max-width:760px) { .settings-surface-row { flex-wrap: wrap; } html body #settingsView .settings-surface-row .settings-mode-tabs { width: 100%; } }
