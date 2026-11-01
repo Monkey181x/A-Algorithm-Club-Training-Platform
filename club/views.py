@@ -154,7 +154,12 @@ def serialize_part(part, include_content=True):
 
 def serialize_submission(submission, include_content=True, parts=None):
     selected_parts = parts if parts is not None else submission.parts.all()
-    return {"id": submission.id, "member_id": submission.member_id, "member_name": submission.member.display_name, "week": submission.week.number, "week_id": submission.week_id, "submitted_at": submission.submitted_at.isoformat(), "record_date": submission.record_date.isoformat(), "is_valid": submission.is_valid, "version": submission.version, "rejection_note": submission.rejection_note, "problem_url": submission.problem.url if submission.problem_id else "", "problem_title": (submission.problem.title or submission.problem.url) if submission.problem_id else "", "semester_name": submission.semester.name, "can_delete": not bool(submission.semester.archived_at), "can_edit": not submission.semester.archived_at and submission.semester.is_active and not submission.week.is_closed and submission.week.starts_at <= timezone.now() < submission.week.ends_at, "can_resubmit": not submission.is_valid and not submission.semester.archived_at and not submission.week.is_closed and submission.week.starts_at <= timezone.now() < submission.week.ends_at, "parts": [serialize_part(part, include_content) for part in selected_parts]}
+    now = timezone.now()
+    today = timezone.localdate(now)
+    active = (not submission.semester.archived_at and submission.semester.is_active
+        and submission.semester.starts_on <= today <= submission.semester.ends_on)
+    can_resubmit = not submission.is_valid and active
+    return {"id": submission.id, "member_id": submission.member_id, "member_name": submission.member.display_name, "week": submission.week.number, "week_id": submission.week_id, "submitted_at": submission.submitted_at.isoformat(), "record_date": submission.record_date.isoformat(), "is_valid": submission.is_valid, "version": submission.version, "rejection_note": submission.rejection_note, "problem_url": submission.problem.url if submission.problem_id else "", "problem_title": (submission.problem.title or submission.problem.url) if submission.problem_id else "", "semester_name": submission.semester.name, "can_delete": not bool(submission.semester.archived_at), "can_edit": not submission.semester.archived_at and submission.semester.is_active and not submission.week.is_closed and submission.week.starts_at <= timezone.now() < submission.week.ends_at, "can_resubmit": can_resubmit, "parts": [serialize_part(part, include_content) for part in selected_parts]}
 
 
 @ensure_csrf_cookie
@@ -617,11 +622,19 @@ def submissions(request, submission_id=None, edit=False):
                 if record_date.year<2000 or record_date>today: return api_error('测试日期须为2000年以后且不晚于今天')
                 from .admin_test_mode import sandbox_week
                 semester,week = sandbox_week(membership.team,record_date)
-            historical = submission_id is None and record_date < today and not sandbox
+            previous = None
+            if submission_id is not None:
+                previous = Submission.objects.filter(pk=submission_id, member=membership,
+                    team=membership.team, week=week).first()
+                if not previous:
+                    return api_error('仅能修改本人原周的提交记录', 409)
+                record_date = previous.record_date
+            correction = previous is not None and not previous.is_valid
+            historical = record_date < today and not sandbox and previous is None
             if not sandbox and (semester.archived_at or not semester.is_active
                     or not semester.starts_on <= today <= semester.ends_on):
                 return api_error('当前学期已结束或尚未开放，不能继续提交', 409)
-            if not sandbox and not historical and (week.is_closed or not week.starts_at <= now < week.ends_at):
+            if not sandbox and not historical and not correction and (week.is_closed or not week.starts_at <= now < week.ends_at):
                 return api_error('该周次已截止或尚未开放，不能继续提交，请刷新页面', 409)
             if (week.starts_at, week.ends_at) != week_bounds(semester, week.number):
                 return api_error('周次日期异常，请联系管理员修复后再提交', 409)
@@ -677,8 +690,9 @@ def submissions(request, submission_id=None, edit=False):
                 ReviewLog.objects.create(submission=submission, actor=request.user, action='edit' if edit else 'resubmit', detail={'version': submission.version})
             else:
                 submission = Submission.objects.create(team=membership.team, member=membership, semester=semester, week=week, is_valid=True, problem=problem, record_date=record_date)
-            Submission.objects.filter(pk=submission.pk).update(submitted_at=now)
-            submission.submitted_at = now
+            if not correction:
+                Submission.objects.filter(pk=submission.pk).update(submitted_at=now)
+                submission.submitted_at = now
             if proof:
                 part = SubmissionPart.objects.create(submission=submission, kind=SubmissionPart.PROOF, upload=proof)
                 stored_file = part.upload
@@ -703,12 +717,16 @@ def submissions(request, submission_id=None, edit=False):
                     checkin_date=record_date, is_makeup=True)
                 permission.completed_at = now
                 permission.save(update_fields=['completed_at'])
+            elif correction and not sandbox:
+                # Correct the original record without granting a new overview submission.
+                MakeupPermission.objects.filter(member=membership, semester=semester,
+                    record_date=record_date).delete()
             refresh_totals(semester)
             if membership.team.currency_enabled:
                 from .currency_services import settle_weekly_streak,perform_checkin
                 TeamMembership.objects.select_for_update().get(pk=membership.pk)
-                if submission.record_date == today and not CheckinRecord.objects.filter(member=membership,checkin_date=today).exists():
-                    perform_checkin(membership)
+                if (submission.record_date == today or correction) and not CheckinRecord.objects.filter(member=membership,checkin_date=submission.record_date).exists():
+                    perform_checkin(membership, day=submission.record_date)
                 else:
                     settle_weekly_streak(membership, submission.record_date)
     except Exception as exc:
@@ -866,6 +884,7 @@ def delete_own_submission(request, submission_id):
     target = Submission.objects.filter(pk=submission_id, member=member, team_id=member.team_id).first() if member and member.pk else None
     if not target:
         return api_error('提交不存在或不属于本人', 404)
+    User.objects.select_for_update().get(pk=member.user_id)
     semester = Semester.objects.select_for_update().get(pk=target.semester_id)
     Week.objects.select_for_update().get(pk=target.week_id)
     target = Submission.objects.select_for_update().filter(pk=submission_id, member=member).first()
@@ -873,9 +892,42 @@ def delete_own_submission(request, submission_id):
         return api_error('记录已删除，请刷新', 404)
     if semester.archived_at:
         return api_error('学期已归档，不能删除', 409)
-    if body(request).get('version') != target.version:
+    data = body(request)
+    if data.get('version') != target.version:
         return api_error('记录已变化，请刷新后重试', 409)
+    from .reward_recovery import authorize
+    plan, error = authorize(request, target, 'delete', data)
+    if error is not None:
+        return error
     FileDeletion.objects.bulk_create([FileDeletion(name=part.upload.name) for part in target.parts.all() if part.upload])
+    record_date = target.record_date
     target.delete()
+    from .currency_services import reconcile_submission_day
+    reconcile_submission_day(member, record_date, semester, recoveries=plan['recoveries'])
     refresh_totals(semester)
     return JsonResponse({'ok': True})
+
+
+@api_login_required
+def submission_reversal_preview(request, submission_id):
+    if request.method != 'GET':
+        return api_error('仅支持 GET', 405)
+    member = membership_for(request)
+    action = request.GET.get('action','delete')
+    target = Submission.objects.filter(pk=submission_id).select_related('member__team','semester').first()
+    if not target or not member:
+        return api_error('提交不存在', 404)
+    if action == 'delete':
+        allowed = member.pk and target.member_id == member.pk and target.team_id == member.team_id
+    elif action == 'reject':
+        allowed = (request.user.is_superuser or member.is_admin and target.team_id == member.team_id) and target.member.user_id != request.user.pk
+    else:
+        return api_error('操作无效', 400)
+    if not allowed:
+        return api_error('没有权限查看该提交的撤销影响', 403)
+    if target.semester.archived_at:
+        return api_error('学期已归档，不能修改', 409)
+    from .reward_recovery import quote
+    response = JsonResponse(quote(target,request.user,action))
+    response['Cache-Control'] = 'private, no-store'
+    return response

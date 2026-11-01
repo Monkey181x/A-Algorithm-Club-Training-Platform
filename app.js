@@ -99,6 +99,10 @@ $('#activityMonthPopover')?.addEventListener('click',event=>{
 });
 function activityUnit(){return $('#activityMetric')?.value==='daily'?'次':'题';}
 function activitySafeLink(url){try{const u=new URL(url);return ['http:','https:'].includes(u.protocol)?u.href:'';}catch(_){return '';}}
+function updatePulseDay(day){
+  const index=pulseDays.findIndex(item=>item.date===day.date);
+  if(index<0)pulseDays.push(day);else pulseDays[index]={...pulseDays[index],...day};
+}
 function renderActivityDay(day) {
   const container=$('#activityRecords');if(!container)return;
   const metric=$('#activityMetric').value,record=activityPayload?.days.find(d=>d.date===day.date);
@@ -156,7 +160,7 @@ function renderTrainingActivity(){
   $('#activityNote').hidden=true;
   $('#activityNote').textContent='';
   const day=data.days.find(d=>d.date===selectedPulseDate)||data.days.find(d=>d.isToday)||[...data.days].reverse().find(d=>d.date<=data.today)||data.days[0];
-  if(day){if(!pulseDays.some(d=>d.date===day.date))pulseDays.push(day);selectPulseDay(day.date);}
+  if(day){updatePulseDay(day);selectPulseDay(day.date);}
 }
 async function loadTrainingActivity(dashboard=null){
   if(!$('#activityMonth'))return;
@@ -188,7 +192,7 @@ $('#activityHeatmap')?.addEventListener('click',event=>{
   if(event.target.closest('[data-activity-retry]')){loadTrainingActivity();return;}
   const button=event.target.closest('[data-activity-date]');if(!button||!activityPayload)return;
   const day=activityPayload.days.find(d=>d.date===button.dataset.activityDate);if(!day)return;
-  if(!pulseDays.some(d=>d.date===day.date))pulseDays.push(day);
+  updatePulseDay(day);
   selectPulseDay(day.date);
 });
 document.addEventListener('click', async (event) => { if (event.target.id !== 'logoutButton') return; await clubApi.request('/api/auth/logout', {method:'POST'}); window.location.href = '/auth.html'; });
@@ -786,14 +790,14 @@ async function completeMakeup(date) {
     if (selectedPulseDate) selectPulseDay(selectedPulseDate);
   }
 }
-async function openModal(forceToday = false) {
+async function openModal(forceToday = false, correction = null) {
   const selected = forceToday === true ? pulseDays.find(day => day.date === pulseToday)
     : pulseDays.find(day => day.date === selectedPulseDate);
-  const date = selected?.date || pulseToday;
+  const date = correction?.record_date || selected?.date || pulseToday;
   const historical = date < pulseToday;
-  if (!adminTestMode && selected && (!selected.canSubmit || historical && (selected.submitted || selected.isMakeup))) return;
-  let weekId = selected?.weekId || currentSubmissionWeekId;
-  if (historical && !adminTestMode) {
+  if (!correction && !adminTestMode && selected && (!selected.canSubmit || historical && (selected.submitted || selected.isMakeup))) return;
+  let weekId = correction?.week_id || selected?.weekId || currentSubmissionWeekId;
+  if (historical && !adminTestMode && !correction) {
     const permission = await completeMakeup(date);
     if (!permission) return;
     weekId = permission.week_id;
@@ -801,10 +805,11 @@ async function openModal(forceToday = false) {
   loadDailyChallenges(); editingSubmission = null; resubmitting = null;
   $('#modalTitle').textContent = historical ? '补交当日记录' : selected?.submitted || selected?.hasSubmission ? '继续提交' : '提交今日记录'; resetSubmissionForm();
   $('#submissionForm').dataset.recordDate = date || '';
-  $('#submissionForm').dataset.makeup = historical ? '1' : '';
+  $('#submissionForm').dataset.makeup = historical && !correction ? '1' : '';
   if (date) $('.form-note span').textContent = `记录日期：${date}`;
   $('#submissionForm').dataset.weekId = weekId || '';
   if(adminTestMode) $('.form-note span:last-child').textContent='无需补签券';
+  else if (correction) $('.form-note span:last-child').textContent = '修改被驳回记录 · 保留首次提交时间 · 无需补签券';
   else if (historical) $('.form-note span:last-child').textContent = '已开放补交 · 学期结束前有效';
   showSubmissionEditor();
   return true;
@@ -916,7 +921,7 @@ async function loadMySubmissions({force = false} = {}) {
     ownRecords.clear(); submissions.forEach(item => ownRecords.set(item.id, item));
     const empty = $('.empty-state', page);
     page.querySelector('.my-submissions-live')?.remove();
-    if (!submissions.length) { if (empty) { empty.hidden = false; empty.innerHTML = '<div class="empty-icon">□</div><h2>这里会留下你的训练轨迹</h2><p>当前还没有提交记录。</p><button class="secondary-button" id="emptyAction" type="button">继续提交</button>'; $('#emptyAction')?.addEventListener('click', openModal); } return; }
+    if (!submissions.length) { if (empty) { empty.hidden = false; empty.innerHTML = '<div class="empty-icon">□</div><h2>这里会留下你的训练轨迹</h2><p>当前还没有提交记录。</p><button class="secondary-button" id="emptyAction" type="button">提交今日记录</button>'; $('#emptyAction')?.addEventListener('click', () => openModal(true)); } return; }
     const list = document.createElement('div');
     list.className = 'panel my-submissions-live';
     const today = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date());
@@ -1196,7 +1201,7 @@ async function loadDashboardSummary({forceMine = false} = {}) {
   const dashboardResponse = await clubApi.request('/api/dashboard');
   if (!dashboardResponse.ok) return null;
   const dashboard = await dashboardResponse.json();
-  loadTrainingActivity(dashboard);
+  await loadTrainingActivity(dashboard);
   const scoreValue = $('.metric-card.featured .metric-value');
   const scoreFoot = $('.metric-card.featured .metric-foot span');
   const submissionValue = $('.metric-card:nth-child(2) .metric-value');
@@ -1222,13 +1227,14 @@ async function loadDashboardSummary({forceMine = false} = {}) {
   return dashboard;
 }
 
-async function loadLeaderboard(scope = 'checkin', platform='codeforces') {
+async function loadLeaderboard(scope = 'checkin', platform='codeforces', {force=false} = {}) {
   const key = rankingKey(scope,platform);
-  if (leaderboardInFlight.has(key)) return leaderboardInFlight.get(key);
+  if (!force && leaderboardInFlight.has(key)) return leaderboardInFlight.get(key);
   const request = (async () => {
     try {
       const response = await clubApi.request(`/api/leaderboard?scope=${encodeURIComponent(scope)}&platform=${encodeURIComponent(platform)}`);
       const payload = await response.json();
+      if (leaderboardInFlight.get(key) !== request) return false;
       if (!response.ok) throw new Error(payload.error || '榜单加载失败');
       rankingData[key] = payload.rows || [];
       for (const target of ['#leaderboardList','#leaderboardListFull']) {
@@ -1250,11 +1256,14 @@ async function loadLeaderboard(scope = 'checkin', platform='codeforces') {
 }
 
 async function refreshAfterMutation({refreshAdmin = false} = {}) {
+  const selections=new Map(['#leaderboardList','#leaderboardListFull'].map(target=>{
+    const selected=rankingSelection(target);return [rankingKey(selected.scope,selected.platform),selected];
+  }));
   const tasks = [
     window.CurrencyModule?.init(),
     loadRecentActivity({force: true}),
-    loadDashboardSummary(),
-    ...['#leaderboardList','#leaderboardListFull'].map(target => {const selected=rankingSelection(target);return loadLeaderboard(selected.scope,selected.platform);}),
+    loadDashboardSummary({forceMine:true}),
+    ...[...selections.values()].map(selected=>loadLeaderboard(selected.scope,selected.platform,{force:true})),
   ];
   if (currentView === 'submissions') tasks.push(loadMySubmissions());
   if (refreshAdmin && currentView === 'admin') tasks.push(loadAdminQueue());
@@ -1544,12 +1553,13 @@ $('#deleteOwnSubmission').addEventListener('click', async () => {
   const record = ownRecords.get(Number(activeSubmissionId));
   if (!record?.can_delete) return;
   closeReview();
-  if (!await confirmWorkbench('删除提交记录', '将删除整条提交及其材料，并撤销积分和有效提交次数。此操作无法恢复。', null, '确认后会移除整条记录，相关积分、次数和签到将重新计算。')) { openReview(key); return; }
   try {
-    await communityRequest(`/api/submissions/${record.id}`, {method:'DELETE', body:JSON.stringify({version:record.version}), headers:{'Content-Type':'application/json'}});
+    const preview=await confirmSubmissionReversal(record.id,'delete',{alwaysConfirm:true});
+    if(!preview){openReview(key);return;}
+    await communityRequest(`/api/submissions/${record.id}`, {method:'DELETE', body:JSON.stringify({version:record.version,recovery_token:preview.token}), headers:{'Content-Type':'application/json'}});
     delete reviewData[key]; ownRecords.delete(record.id);
     await refreshAfterMutation({refreshAdmin:canManage});
-    showToast('记录已删除，积分与提交次数已更新');
+    showToast('记录已删除，积分、签到、奖励及过题量已重新计算');
   } catch (error) { showToast(error.message); }
 });
 

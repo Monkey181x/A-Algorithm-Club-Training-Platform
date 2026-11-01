@@ -2,6 +2,7 @@
 Currency system business logic
 """
 from datetime import date, timedelta
+from django.contrib.auth.models import User
 from django.db import transaction,IntegrityError
 from django.db.models import Sum
 import uuid
@@ -107,13 +108,19 @@ def get_current_streak(member):
 
 
 @transaction.atomic
-def perform_checkin(member):
-    """Perform daily check-in"""
-    today = timezone.localdate()
+def perform_checkin(member, *, day=None):
+    """Sign today, or restore the original day of a rejected submission."""
+    today = day or timezone.localdate()
     if not member.pk:
         raise ValueError('仅团队成员可以签到')
+    # Use the same lock order as submission creation, deletion and rejection.
+    User.objects.select_for_update().get(pk=member.user_id)
     if not TeamMembership.objects.select_for_update().get(pk=member.pk).is_active:
         raise ValueError('当前成员权限已失效')
+    from .models import Submission
+    if not Submission.objects.filter(team=member.team, member=member,
+            record_date=today, is_valid=True).exists():
+        raise ValueError('该日期没有有效提交，不能签到或领取奖励')
 
     # Check if already checked in today
     if CheckinRecord.objects.filter(team=member.team, member=member, checkin_date=today).exists():
@@ -124,7 +131,8 @@ def perform_checkin(member):
         team=member.team,
         member=member,
         checkin_date=today,
-        is_makeup=False
+        is_makeup=False,
+        reward_amount=member.team.daily_checkin_reward,
     )
 
     # Award daily check-in reward
@@ -218,6 +226,9 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
     # The item lock serializes purchases and limit edits before counting history.
     if item.item_type == 'physical' and item.purchase_limit:
         purchased = Purchase.objects.filter(item=item, member__user_id=member.user_id).aggregate(total=Sum('quantity'))['total'] or 0
+        from .models import ShopFulfillment
+        purchased -= ShopFulfillment.objects.filter(purchase__item=item,
+            purchase__member__user_id=member.user_id,status='reclaimed').count()
         if purchased + quantity > item.purchase_limit:
             raise ValueError(f'已达购买上限：每人累计限购{item.purchase_limit}件，已购买{purchased}件')
 
@@ -349,8 +360,65 @@ def settle_weekly_streak(member, day):
     for rule in StreakReward.objects.filter(team=member.team, days__lte=longest).order_by('days'):
         grant, created = WeeklyStreakGrant.objects.get_or_create(team=member.team,user_id=member.user_id, week_start=monday,
             days=rule.days, defaults={'member':member,'amount':rule.reward})
-        if created:
-            add_currency(member, rule.reward, CurrencyTransaction.STREAK_BONUS,
+        if created or grant.revoked_at:
+            if grant.revoked_at:
+                grant.revoked_at = None
+                grant.member = member
+                grant.save(update_fields=['revoked_at', 'member'])
+            add_currency(member, grant.amount, CurrencyTransaction.STREAK_BONUS,
                 f'{monday.isoformat()} 自然周 {rule.days} 天连签奖励')
-            awarded += rule.reward
+            awarded += grant.amount
     return awarded
+
+
+def reverse_signin_reward(member, amount, description):
+    """Reverse the exact paid amount, including spent rewards, with an audit entry."""
+    if not amount:
+        return
+    balance = get_or_create_balance(member)
+    balance = CurrencyBalance.objects.select_for_update().get(pk=balance.pk)
+    if balance.balance-amount < -2147483648:
+        raise ValueError('奖励撤回超出余额存储范围，请联系管理员')
+    balance.balance -= amount
+    balance.save(update_fields=['balance', 'updated_at'])
+    CurrencyTransaction.objects.create(team=member.team, member=member, amount=-amount,
+        balance_after=balance.balance, transaction_type=CurrencyTransaction.REWARD_REVERSAL,
+        description=description)
+
+
+@transaction.atomic
+def reconcile_submission_day(member, day, semester, recoveries=(), *, reopen_makeup=True):
+    """Remove day-level benefits only after its final valid submission is gone."""
+    from .models import Submission, WeeklyStreakGrant
+    TeamMembership.objects.select_for_update().get(pk=member.pk)
+    if Submission.objects.filter(member=member, record_date=day, is_valid=True).exists():
+        return False
+    checkin = CheckinRecord.objects.select_for_update().filter(member=member,
+        team=member.team, checkin_date=day).first()
+    if checkin:
+        reverse_signin_reward(member, checkin.reward_amount, f'{day.isoformat()} 提交全部失效，撤回签到奖励')
+        checkin.delete()
+    permission = MakeupPermission.objects.filter(member=member, semester=semester, record_date=day)
+    if reopen_makeup:
+        permission.update(completed_at=None)
+    else:
+        permission.delete()
+    today = timezone.localdate()
+    if reopen_makeup and semester.is_active and not semester.archived_at and semester.starts_on <= day < today <= semester.ends_on:
+        # Corrections reuse the already earned/opened date; do not spend another ticket.
+        MakeupPermission.objects.get_or_create(member=member, semester=semester, record_date=day)
+    monday = day-timedelta(days=day.weekday())
+    dates = signed_dates(member, monday, monday+timedelta(days=6))
+    longest = run = 0
+    for offset in range(7):
+        run = run+1 if monday+timedelta(days=offset) in dates else 0
+        longest = max(longest, run)
+    for grant in WeeklyStreakGrant.objects.select_for_update().filter(member=member,
+            team=member.team, week_start=monday, revoked_at__isnull=True, days__gt=longest):
+        reverse_signin_reward(member, grant.amount, f'{monday.isoformat()} 自然周 {grant.days} 天连签失效，撤回奖励')
+        grant.revoked_at = timezone.now()
+        grant.save(update_fields=['revoked_at'])
+    if recoveries:
+        from .reward_recovery import reclaim
+        reclaim(member, recoveries)
+    return bool(checkin)

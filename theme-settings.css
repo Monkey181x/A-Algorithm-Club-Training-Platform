@@ -435,6 +435,8 @@ html[data-site-mode="dark"] .workbench-date-fields input{color-scheme:dark;}
 .submission-material-tabs button[aria-selected="true"]{background:color-mix(in srgb,var(--site-accent,var(--teal)) 16%,var(--site-surface,var(--panel)));color:var(--site-accent,var(--teal));}
 .submission-code-pane,.submission-blog-pane{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;flex:1;}
 .code-language-label{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;}
+.solution-summary .submission-member-info{flex:1;min-width:0;}
+.submission-language-tag{display:inline-flex;align-items:center;flex:none;margin-left:auto;max-width:40%;padding:4px 8px;border:1px solid var(--site-border,var(--line));border-radius:var(--site-inner-radius,8px);background:var(--site-fill,var(--teal-soft));color:var(--site-accent,var(--teal-dark));font-size:11px;font-weight:600;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #submissionCodeLanguage{max-width:160px;padding:5px 9px;border:1px solid var(--site-border,var(--line));background:var(--site-fill,var(--canvas));color:var(--site-text,var(--ink));}
 #submissionCodeInput{display:block;flex:1;width:100%;min-height:95px;resize:none;border:1px solid var(--site-border,var(--line));border-radius:var(--site-inner-radius,10px);padding:10px 12px;tab-size:4;white-space:pre;overflow:auto;font:12px/1.6 Consolas,'Cascadia Code',monospace;background:var(--site-fill,var(--canvas));color:var(--site-text,var(--ink));}
 .code-preview-heading{display:flex;justify-content:space-between;gap:8px;color:var(--site-secondary,var(--muted));font-size:11px;}

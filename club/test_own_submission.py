@@ -18,7 +18,7 @@ class OwnSubmissionTests(TestCase):
             item.save(update_fields=['is_valid'])
             with patch('club.problem_parser.get_problem', return_value=self.problem):
                 response = self.client.post('/api/submissions', {'week_id': self.week.pk,
-                    'problem_url': fixtures.URL + '/?from=test', 'proof': self.image()})
+                    'code':'int main() {}', 'code_language':'cpp', 'problem_url': fixtures.URL + '/?from=test', 'proof': self.image()})
             self.assertEqual(response.status_code, 409, response.content)
             self.assertIn('已提交过', response.json()['error'])
         self.assertEqual(Submission.objects.filter(member=self.author_member).count(), 1)
@@ -34,7 +34,7 @@ class OwnSubmissionTests(TestCase):
                                   week=self.week, problem=other_problem)
         with patch('club.problem_parser.get_problem', return_value=other_problem):
             response = self.client.post(f'/api/submissions/{item.id}/edit', {'week_id':self.week.pk,
-                'version':item.version, 'problem_url':other_problem.url})
+                'version':item.version, 'code':'int main() {}', 'code_language':'cpp', 'problem_url':other_problem.url})
         self.assertEqual(response.status_code, 409, response.content)
         item.refresh_from_db()
         self.assertEqual(item.problem_id, self.problem.id)
@@ -45,7 +45,7 @@ class OwnSubmissionTests(TestCase):
         date = item.record_date
         SubmissionLike.objects.create(submission=item, user=self.reader)
         response = self.client.post(f'/api/submissions/{item.id}/edit', {'week_id': self.week.id,
-            'version': item.version, 'problem_url': fixtures.URL, 'blog': '# 新 Blog'})
+            'version': item.version, 'code':'int main() {}', 'code_language':'cpp', 'problem_url': fixtures.URL, 'blog': '# 新 Blog'})
         self.assertEqual(response.status_code, 201, response.content)
         item.refresh_from_db()
         self.assertEqual(item.version, 2)
@@ -56,7 +56,7 @@ class OwnSubmissionTests(TestCase):
         total = SemesterMemberTotal.objects.get(member=self.author_member)
         self.assertEqual((total.total_score, total.total_submissions), (2, 1))
         self.assertEqual(self.client.post(f'/api/submissions/{item.id}/edit', {'week_id':self.week.id,
-            'version':1, 'problem_url':fixtures.URL}).status_code, 409)
+            'version':1, 'code':'int main() {}', 'code_language':'cpp', 'problem_url':fixtures.URL}).status_code, 409)
 
     def test_delete_revokes_score_qualification_and_attachment(self):
         item = self.submit()
@@ -80,13 +80,13 @@ class OwnSubmissionTests(TestCase):
         self.client.force_login(self.reader)
         self.assertEqual(self.client.delete(f'/api/submissions/{item.id}', json.dumps({'version':1}), content_type='application/json').status_code, 404)
         self.assertEqual(self.client.post(f'/api/submissions/{item.id}/edit', {'week_id':self.week.id,
-            'version':1, 'problem_url':fixtures.URL}).status_code, 409)
+            'version':1, 'code':'int main() {}', 'code_language':'cpp', 'problem_url':fixtures.URL}).status_code, 409)
         self.client.force_login(self.author)
         self.assertEqual(self.client.delete(f'/api/submissions/{item.id}', json.dumps({'version':0}), content_type='application/json').status_code, 409)
         self.week.is_closed = True
         self.week.save()
         self.assertEqual(self.client.post(f'/api/submissions/{item.id}/edit', {'week_id':self.week.id,
-            'version':1, 'problem_url':fixtures.URL}).status_code, 409)
+            'version':1, 'code':'int main() {}', 'code_language':'cpp', 'problem_url':fixtures.URL}).status_code, 409)
         from django.utils import timezone
         self.semester.archived_at = timezone.now()
         self.semester.save()

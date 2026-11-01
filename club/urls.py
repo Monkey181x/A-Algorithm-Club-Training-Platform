@@ -13,6 +13,8 @@ from . import shop_fulfillment
 
 urlpatterns = [
     path("currency/inventory/<int:unit_id>/redeem", shop_fulfillment.redeem),
+    path("currency/inventory/<int:inventory_id>/use", shop_fulfillment.use_consumable),
+    path("submissions/<int:submission_id>/reversal-preview", views.submission_reversal_preview),
     path("currency/admin/dispatch", shop_fulfillment.dispatch_inbox),
     path("admin-test-mode", toggle_test_mode),
     path('training-activity', training_activity),

@@ -9,20 +9,20 @@ from .models import (Submission, SubmissionPart, SolvedProblemCredit, CheckinRec
 class TrainingActivityTests(TestCase):
     setUp = fixtures.CommunityTests.setUp
 
-    def test_date_strip_is_monday_to_sunday_for_each_day_of_week(self):
+    def test_date_strip_spans_previous_monday_to_today_for_each_day_of_week(self):
         from datetime import datetime, time
         from unittest.mock import patch
         monday=timezone.localdate()-timedelta(days=timezone.localdate().weekday())
-        expected=[(monday+timedelta(days=i)).isoformat() for i in range(7)]
         for index in range(7):
             now=timezone.make_aware(datetime.combine(monday+timedelta(days=index),time(12)))
             with self.subTest(weekday=index),patch('django.utils.timezone.now',return_value=now):
                 response=self.client.get('/api/dashboard')
                 self.assertEqual(response.status_code,200,response.content)
                 days=response.json()['pulse']
+                expected=[(monday+timedelta(days=i-7)).isoformat() for i in range(index+8)]
                 self.assertEqual([d['date'] for d in days],expected)
                 self.assertEqual(sum(d['isToday'] for d in days),1)
-                self.assertFalse(any(d['canSubmit'] for d in days if d['date']>expected[index]))
+                self.assertFalse(any(d['date']>expected[-1] for d in days))
 
     def test_heatmap_retains_records_older_than_current_week(self):
         old=timezone.localdate()-timedelta(days=10)

@@ -73,6 +73,20 @@ async function communityRequest(url, options) {
   return data;
 }
 
+async function confirmSubmissionReversal(id, action, {alwaysConfirm=false} = {}) {
+  const preview=await communityRequest(`/api/submissions/${id}/reversal-preview?action=${action}`);
+  const lines=[action==='delete'?'将删除整条提交及其材料，此操作无法恢复。':'将驳回该提交，并重新计算关联积分和签到。'];
+  if(preview.reward_reversal)lines.push(`将撤回签到及连签奖励 ${preview.reward_reversal} Coins。`);
+  for(const item of preview.items||[])lines.push(`该操作会导致“${item.name}”被回收（${item.quantity} 件），按原价返还 ${item.refund} Coins。`);
+  const debt=preview.reward_reversal>0&&preview.balance_after<0;
+  if(debt)lines.push(`回收后仍有 ${-preview.balance_after} Coins 待抵扣，将记为负余额。`);
+  if(alwaysConfirm||preview.items?.length||debt){
+    if(!await window.clubDialog.confirm({title:action==='delete'?'删除提交记录':'确认驳回与物品回收',
+      text:lines.join('\n\n'),confirmText:action==='delete'?'确认删除':'确认驳回'}))return null;
+  }
+  return preview;
+}
+
 const showcaseRecords=new Map();
 function openShowcaseDetails(id){
   const item=showcaseRecords.get(Number(id));if(!item)return;
@@ -88,8 +102,11 @@ function submissionCard(item, moderation = false) {
   const blog = item.parts.find(p => p.kind === 'blog');
   const code = item.parts.find(p => p.kind === 'code');
   if(!moderation){
+    const language=code?.text?.trim()?parseSubmissionCode(code.text).language:null;
+    const languageLabel=language?([...($('#submissionCodeLanguage')?.options||[])].find(option=>option.value===language)?.textContent.trim()||language):'';
+    const languageTag=languageLabel?`<span class="submission-language-tag" aria-label="代码语言：${escapeHtml(languageLabel)}" title="代码语言：${escapeHtml(languageLabel)}">${escapeHtml(languageLabel)}</span>`:'';
     showcaseRecords.set(Number(item.id),item);
-    return `<article class="solution-card solution-summary panel" data-submission="${item.id}"><div class="member-line">${memberAvatar(item.member_id,uiMemberName(item.member_name))}<div><strong>${escapeHtml(uiMemberName(item.member_name))}</strong><small>提交于 ${new Date(item.submitted_at).toLocaleString('zh-CN')}</small></div></div><section class="solution-reasoning"><h3>题解思路</h3><p>${escapeHtml(logic?.text||'暂未填写题解思路。')}</p></section><button type="button" class="secondary-button solution-detail-button" data-solution-detail="${item.id}">查看详情</button><div class="solution-actions"><button class="secondary-button ${item.liked?'is-liked':''}" data-like="${item.id}" data-liked="${item.liked}" aria-pressed="${Boolean(item.liked)}" ${item.own?'disabled':''}>赞 ${item.likes}</button>${item.can_tip?`<button class="secondary-button" data-tip="${item.id}">打赏</button>`:''}<button class="text-button" data-report="${item.id}" ${item.own||item.reported?'disabled':''}>${item.reported?'已举报':'举报'}</button>${item.can_reject?`<button class="text-button" data-direct-reject="${item.id}" data-version="${item.version}">驳回</button>`:''}</div></article>`;
+    return `<article class="solution-card solution-summary panel" data-submission="${item.id}"><div class="member-line">${memberAvatar(item.member_id,uiMemberName(item.member_name))}<div class="submission-member-info"><strong>${escapeHtml(uiMemberName(item.member_name))}</strong><small>提交于 ${new Date(item.submitted_at).toLocaleString('zh-CN')}</small></div>${languageTag}</div><section class="solution-reasoning"><h3>题解思路</h3><p>${escapeHtml(logic?.text||'暂未填写题解思路。')}</p></section><button type="button" class="secondary-button solution-detail-button" data-solution-detail="${item.id}">查看详情</button><div class="solution-actions"><button class="secondary-button ${item.liked?'is-liked':''}" data-like="${item.id}" data-liked="${item.liked}" aria-pressed="${Boolean(item.liked)}" ${item.own?'disabled':''}>赞 ${item.likes}</button>${item.can_tip?`<button class="secondary-button" data-tip="${item.id}">打赏</button>`:''}<button class="text-button" data-report="${item.id}" ${item.own||item.reported?'disabled':''}>${item.reported?'已举报':'举报'}</button>${item.can_reject?`<button class="text-button" data-direct-reject="${item.id}" data-version="${item.version}">驳回</button>`:''}</div></article>`;
   }
   return `<article class="solution-card panel" data-submission="${item.id}">
     <div class="member-line">${memberAvatar(item.member_id,uiMemberName(item.member_name))}<div><strong>${escapeHtml(uiMemberName(item.member_name))}</strong><small>${escapeHtml(item.semester_name)} · 第${item.week}周<br>归属日期：${escapeHtml(item.record_date || '')}<br>上传：${new Date(item.submitted_at).toLocaleString('zh-CN')}</small></div></div>
@@ -210,11 +227,15 @@ async function loadAdminQueue({append = false, page = 1} = {}) {
 function stopAdminQueuePolling() { reportRequest++; }
 function startAdminQueuePolling() { loadWorkbench(); }
 
-async function beginResubmit(id) {
+async function beginResubmit(id, {edit = false} = {}) {
   const record = ownRecords.get(Number(id));
   if (!record) return;
-  if(!await openModal(true))return false;
-  resubmitting = record.id;
+  if (!(edit ? record.can_edit : record.can_resubmit)) {
+    showToast(edit ? '该记录已截止或学期已归档' : '该记录当前不能重新提交');
+    return false;
+  }
+  if (!await openModal(false, record)) return false;
+  resubmitting = edit ? null : record.id;
   $('#submissionForm').dataset.weekId = record.week_id;
   $('#submissionForm').dataset.recordDate = record.record_date;
   $('.form-note span').textContent = `记录日期：${record.record_date}`;
@@ -275,13 +296,16 @@ document.addEventListener('click', async event => {
       await communityRequest(`/api/submissions/${button.dataset.report}/report`, {method: 'POST'});
       button.textContent = '已举报'; button.dataset.done = 'true'; showToast('举报已交由管理员处理');
     } else if (button.dataset.directReject) {
-      await communityRequest(`/api/submissions/${button.dataset.directReject}/reject`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,version:Number(button.dataset.version)})});
-      showToast('已驳回，积分已撤销');
+      const preview=await confirmSubmissionReversal(button.dataset.directReject,'reject');if(!preview)return;
+      await communityRequest(`/api/submissions/${button.dataset.directReject}/reject`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,version:Number(button.dataset.version),recovery_token:preview.token})});
+      showToast('已驳回，积分、签到奖励与过题量已重新计算');
       if (galleryProblem) await openProblem(galleryProblem);
       await refreshAfterMutation();
     } else {
-      await communityRequest(`/api/admin/reports/${button.dataset.id}/resolve`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:button.dataset.resolve, note, version:Number(button.dataset.version)})});
-      showToast(button.dataset.resolve === 'reject' ? '已退回，积分已撤销' : '已驳回举报');
+      const preview=button.dataset.resolve==='reject'?await confirmSubmissionReversal(button.dataset.id,'reject'):null;
+      if(button.dataset.resolve==='reject'&&!preview)return;
+      await communityRequest(`/api/admin/reports/${button.dataset.id}/resolve`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:button.dataset.resolve, note, version:Number(button.dataset.version),recovery_token:preview?.token})});
+      showToast(button.dataset.resolve === 'reject' ? '已退回，积分、签到奖励与过题量已重新计算' : '已驳回举报');
       await loadWorkbench(); await refreshAfterMutation();
     }
   } catch (error) { showToast(error.message); }
@@ -349,10 +373,11 @@ async function editOwnSubmission(id) {
   if (!record?.can_edit) { showToast('该记录已截止或学期已归档'); return; }
   const returnState=captureEditReturn();
   closeReview();
-  if(!await beginResubmit(id)){restoreEditReturn(returnState);return;}
+  if(!await beginResubmit(id, {edit:true})){restoreEditReturn(returnState);return;}
   submissionEditReturnState=returnState;
   editingSubmission = Number(id);
   resubmitting = null;
+  $('.form-note span:last-child').textContent = '编辑原提交 · 不消耗补签券';
   $('#proofImage').required = false;
   $('.upload-box strong').textContent = '保留原截图，点击可更换';
   $('#proofHint').textContent = '未选择新图片时保留原截图';

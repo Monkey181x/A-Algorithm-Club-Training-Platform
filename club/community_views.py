@@ -1,4 +1,5 @@
 from django.core.paginator import Paginator
+from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
 from django.http import JsonResponse
@@ -257,6 +258,7 @@ def resolve_report(request, submission_id, direct=False):
     target = targets.first()
     if not target:
         return api_error('提交不存在', 404)
+    User.objects.select_for_update().get(pk=target.member.user_id)
     semester = Semester.objects.select_for_update().get(pk=target.semester_id)
     target = Submission.objects.select_for_update().filter(pk=submission_id).first()
     if not target or semester.archived_at:
@@ -275,12 +277,20 @@ def resolve_report(request, submission_id, direct=False):
     reports = target.reports.filter(status='pending', version=target.version)
     if not direct and not reports.exists():
         return api_error('举报已处理，请刷新', 409)
+    plan = None
+    if action == 'reject':
+        from .reward_recovery import authorize
+        plan, error = authorize(request, target, 'reject', data)
+        if error is not None:
+            return error
     reports.update(status='rejected' if action == 'reject' else 'dismissed', resolved_by=request.user, resolved_at=timezone.now(), note=note)
     if action == 'reject':
         target.is_valid = False
         target.rejection_note = note
         target.save(update_fields=['is_valid', 'rejection_note'])
         target.parts.update(status='rejected', points_awarded=0, review_note=note, reviewed_at=timezone.now(), reviewed_by=request.user)
+        from .currency_services import reconcile_submission_day
+        reconcile_submission_day(target.member, target.record_date, semester, recoveries=plan['recoveries'], reopen_makeup=False)
         refresh_totals(semester)
     ReviewLog.objects.create(submission=target, actor=request.user, action=('direct_' if direct else 'report_') + action, detail={'version': target.version, 'note': note})
     return JsonResponse({'ok': True})

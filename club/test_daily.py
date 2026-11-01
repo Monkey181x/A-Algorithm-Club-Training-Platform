@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from unittest.mock import patch
 from django.test import TestCase
@@ -26,6 +27,7 @@ class DailyRecordsTests(TestCase):
     def submit(self, day, **extra):
         week = self.semester.weeks.get(starts_at__date__lte=day, ends_at__date__gt=day)
         payload = {'week_id': week.pk, 'problem_url':fixtures.URL,
+                   'code':'int main() {}', 'code_language':'cpp',
                    'record_date':day.isoformat(), 'proof':self.image(), **extra}
         with patch('club.problem_parser.get_problem', return_value=self.problem):
             return self.client.post('/api/submissions', payload)
@@ -61,9 +63,12 @@ class DailyRecordsTests(TestCase):
         day=next(d for d in dashboard['pulse'] if d['date']==self.day.isoformat())
         self.assertTrue(day['isMakeup']);self.assertFalse(day['canSubmit'])
         self.assertFalse(day['makeupOpen']);self.assertEqual(dashboard['streakDays'],1)
-        # Removing the training submission never reopens the spent permission.
-        Submission.objects.filter(member=self.author_member).delete()
-        self.assertEqual(self.submit(self.day).status_code,409)
+        # Removing the final submission reopens the already paid permission.
+        item = Submission.objects.get(member=self.author_member)
+        deleted = self.client.delete(f'/api/submissions/{item.pk}', json.dumps({'version':item.version}), content_type='application/json')
+        self.assertEqual(deleted.status_code,200)
+        self.assertEqual(self.submit(self.day).status_code,201)
+        self.inventory.refresh_from_db();self.assertEqual(self.inventory.quantity,2)
 
     def test_failed_submission_keeps_permission_without_spending_again(self):
         self.makeup(self.day.isoformat())

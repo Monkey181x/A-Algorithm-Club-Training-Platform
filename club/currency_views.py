@@ -263,6 +263,12 @@ def api_shop_items(request):
     items = ShopItem.objects.filter(team=member.team, is_active=True)
     purchased = dict(Purchase.objects.filter(item__team=member.team, member__user_id=request.user.pk)
                      .order_by().values('item_id').annotate(total=Sum('quantity')).values_list('item_id', 'total'))
+    from .models import ShopFulfillment
+    from django.db.models import Count
+    for row in ShopFulfillment.objects.filter(purchase__item__team=member.team,
+            purchase__member__user_id=request.user.pk,status='reclaimed').values('purchase__item_id').annotate(total=Count('id')):
+        item_id = row['purchase__item_id']
+        purchased[item_id] = max(0,purchased.get(item_id,0)-row['total'])
 
     data = [{
         "id": item.id,
@@ -330,11 +336,13 @@ def api_user_inventory(request):
 
     data = [{
         "id": inv.id,
+        "inventory_id": inv.id,
         "item_id": inv.item_id,
         "item_name": inv.item.name,
         "description": inv.item.description,
         "item_type": inv.item.item_type,
         "quantity": inv.quantity,
+        "can_use": inv.item.item_type == 'consumable',
         "icon": shop_item_icon_url(inv.item)
     } for inv in inventory_items]
 
