@@ -65,7 +65,7 @@ This project was born out of the need to make it easier to compile statistics on
 
 管理员在团队货币配置中统一设置签到、连签，并沿用小登／老登划分配置各平台赛内及补题奖励。QOJ 默认每题 2 Coins，可在个人空间或补题 Tracker 领取。
 
-升级执行迁移 `0041`–`0043`，重新构建并重启 Web、Worker、Beat。目录每天北京时间 06:00、18:00 更新。参考 [OJ Insight MIT License](docs/third-party/OJ-Insight-LICENSE.txt)。
+升级执行迁移 `0041`–`0044`，重新构建并重启 Web、Worker、Beat。`0044_merge_tracker_notifications` 仅合并 Tracker 与通知功能的迁移依赖，不修改业务数据。目录每天北京时间 06:00、18:00 更新。参考 [OJ Insight MIT License](docs/third-party/OJ-Insight-LICENSE.txt)。
 
 ## 题目展示与举报
 

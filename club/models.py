@@ -7,6 +7,31 @@ from django.db import models
 from django.utils import timezone
 
 
+class AstrBotNotification(models.Model):
+    """Transactional outbox; retained after delivery for idempotency and inspection."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event_key = models.CharField(max_length=180, unique=True)
+    payload = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now, db_index=True)
+    last_error = models.CharField(max_length=120, blank=True)
+
+
+class TeamNotificationSettings(models.Model):
+    team = models.OneToOneField('Team', on_delete=models.CASCADE, related_name='notification_settings')
+    enabled = models.BooleanField(default=False)
+    encrypted_api_token = models.TextField(blank=True)
+    report_enabled = models.BooleanField(default=True)
+    item_use_enabled = models.BooleanField(default=True)
+    physical_purchase_enabled = models.BooleanField(default=True)
+    qualification_enabled = models.BooleanField(default=True)
+    review_weekday = models.PositiveSmallIntegerField(default=6)
+    review_time = models.TimeField(default=time(21, 0))
+
+
 class SolvedProblemCredit(models.Model):
     """Lifetime evidence, independent of semester, membership and transient sync rows."""
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='solved_credits')

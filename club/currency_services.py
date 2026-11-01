@@ -195,7 +195,12 @@ def makeup_checkin(member, checkin_date):
         raise error
     inventory.quantity -= 1
     inventory.save(update_fields=['quantity'])
-    MakeupPermission.objects.create(member=member, semester=semester, record_date=checkin_date)
+    permission = MakeupPermission.objects.create(member=member, semester=semester, record_date=checkin_date)
+    from .astrbot_notifications import queue_notification
+    queue_notification(f'makeup-use:{permission.pk}', 'item_used', member.team,
+        f'【商品使用】{member.display_name} 使用了 {inventory.item.name} ×1。'
+        f'\n补签日期：{checkin_date.isoformat()}', member_id=member.pk,
+        item_id=inventory.item_id, permission_id=permission.pk)
     return result(False)
 
 @transaction.atomic
@@ -270,6 +275,8 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
         inventory.save()
 
     create_fulfillments(purchase, codes)
+    from .astrbot_notifications import notify_purchase
+    notify_purchase(purchase)
     return {"success": True, "total_price": total_price}
 
 

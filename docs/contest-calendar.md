@@ -36,7 +36,7 @@ Codeforces 可填写 API Key / Secret；牛客和 LeetCode 可填写 Cookie；QO
 
 ## 升级与接口
 
-执行迁移 `0041`–`0043`，重新构建并重启 Web、Worker、Beat。迁移保留现有绑定、历史关联及领奖记录，后续同步补全题目记录。
+执行迁移 `0041`–`0044`，重新构建并重启 Web、Worker、Beat。`0044_merge_tracker_notifications` 仅合并 Tracker 与通知功能的迁移依赖，不修改业务数据。通知每分钟检查，Tracker 目录继续每日北京时间 06:00、18:00 刷新。迁移保留现有绑定、历史关联及领奖记录，后续同步补全题目记录。
 
 - `POST /api/profile/platforms/{platform}/accounts`：添加账号。
 - `PATCH/DELETE /api/profile/platform-accounts/{id}`：编辑、解绑。

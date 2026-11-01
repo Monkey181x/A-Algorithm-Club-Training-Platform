@@ -13,10 +13,10 @@ window.TeamManagement = (() => {
     dialog.setAttribute('aria-labelledby','tmTitle');
     dialog.setAttribute('aria-modal','true');
     dialog.innerHTML = `<header class="tm-header"><div><p class="section-label">TEAM MANAGEMENT</p><h2 id="tmTitle">团队设置</h2></div><button type="button" class="close-button" data-tm-close aria-label="关闭团队设置">×</button></header>
-      <div class="tm-tabs" role="tablist" aria-label="团队设置分类">${[['config','团队配置'],['members','成员管理'],['currency','Coins 规则']].map(([key,label],i)=>`<button type="button" role="tab" id="tmTab-${key}" aria-controls="tmPanel-${key}" aria-selected="${i===0}" tabindex="${i===0?0:-1}" data-tm-tab="${key}">${label}</button>`).join('')}</div>
+      <div class="tm-tabs" role="tablist" aria-label="团队设置分类">${[['config','团队配置'],['members','成员管理'],['currency','Coins 规则'],['notifications','通知配置']].map(([key,label],i)=>`<button type="button" role="tab" id="tmTab-${key}" aria-controls="tmPanel-${key}" aria-selected="${i===0}" tabindex="${i===0?0:-1}" data-tm-tab="${key}">${label}</button>`).join('')}</div>
       <div class="tm-content"><section id="tmPanel-config" role="tabpanel" aria-labelledby="tmTab-config"><div id="tmConfig"></div></section>
       <section id="tmPanel-members" role="tabpanel" aria-labelledby="tmTab-members" hidden><div class="tm-member-layout"><aside class="tm-member-sidebar"><label class="tm-search">搜索成员<input id="tmSearch" type="search" placeholder="名字、登录账号" autocomplete="off"></label><div id="tmMemberList" aria-label="团队成员"></div></aside><div id="tmMemberDetail" aria-live="polite"></div></div></section>
-      <section id="tmPanel-currency" role="tabpanel" aria-labelledby="tmTab-currency" hidden><div id="tmCurrency"></div></section></div>`;
+      <section id="tmPanel-currency" role="tabpanel" aria-labelledby="tmTab-currency" hidden><div id="tmCurrency"></div></section><section id="tmPanel-notifications" role="tabpanel" aria-labelledby="tmTab-notifications" hidden><div id="tmNotifications"></div></section></div>`;
     overlay = document.createElement('div'); overlay.className = 'tm-overlay';
     overlay.append(dialog); document.body.append(overlay);
     $('[data-tm-close]').onclick = () => dialog.close();
@@ -159,7 +159,7 @@ window.TeamManagement = (() => {
       overlay.classList.add('open'); dialog.show(); document.body.style.overflow='hidden'; $('[data-tm-close]').focus();
     }
     if ((force || reopening) && $('#tmTab-members').getAttribute('aria-selected')==='true') loadMembers();
-    return {config:$('#tmConfig'), currency:$('#tmCurrency')};
+    return {config:$('#tmConfig'), currency:$('#tmCurrency'), notifications:$('#tmNotifications')};
   }
   return {open};
 })();

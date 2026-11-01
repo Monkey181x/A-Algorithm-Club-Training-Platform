@@ -1,0 +1,44 @@
+/* Keep the small daisyUI component bundle aligned with the site's live theme. */
+#tmNotifications {
+  --color-base-100: var(--site-surface, var(--panel));
+  --color-base-200: var(--site-fill, var(--canvas));
+  --color-base-300: var(--site-border, var(--line));
+  --color-base-content: var(--site-text, var(--ink));
+  --color-primary: var(--site-accent, var(--teal));
+  --radius-field: var(--site-inner-radius, 12px);
+  --radius-selector: 999px;
+  --border: 1px;
+  --size-selector: .25rem;
+  --size-field: .25rem;
+  --depth: 0;
+  --noise: 0;
+}
+.team-notification-form { display: grid; gap: 20px; min-width: 0; }
+.notification-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
+.notification-intro .muted { margin: 8px 0 0; }
+#tmNotifications .notification-section { display: grid; gap: 12px; min-width: 0; margin: 0 0 22px; padding: 18px; border: 1px solid var(--site-border, var(--line)); border-radius: var(--site-inner-radius, 14px); }
+#tmNotifications .notification-section legend { font-size: calc(15px * var(--site-ui-scale, 1)); font-weight: 700; padding-inline: 6px; }
+#tmNotifications .notification-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 56px; cursor: pointer; }
+#tmNotifications .notification-toggle-row + .notification-toggle-row { padding-top: 12px; border-top: 1px solid var(--site-border, var(--line)); }
+#tmNotifications .notification-toggle-row input { flex-shrink: 0; }
+#tmNotifications .nt-toggle { min-width: 44px; min-height: 24px; }
+/* The appearance theme uses important input fills; checked switches must remain distinct. */
+#teamManagementDialog #tmNotifications .nt-toggle:checked { color: var(--site-button-text, #fff) !important; background-color: var(--site-accent, var(--teal)) !important; border-color: var(--site-accent, var(--teal)) !important; }
+#tmNotifications .notification-toggle-row strong { font-size: calc(14px * var(--site-ui-scale, 1)); font-weight: 600; }
+#tmNotifications .notification-master { gap: 12px; }
+#tmNotifications .notification-section .muted { margin: 0; overflow-wrap: anywhere; }
+#tmNotifications .notification-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+#tmNotifications .notification-actions button { min-height: 44px; }
+#tmNotifications .notification-schedule-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+#tmNotifications .notification-schedule-fields label { display: grid; gap: 8px; }
+#tmNotifications .notification-feedback:empty { display: none; }
+#tmNotifications .notification-feedback { margin: 0; color: var(--site-accent, var(--teal)); overflow-wrap: anywhere; }
+#tmNotifications .notification-feedback[data-error=true] { color: var(--site-text, var(--ink)); border-inline-start: 3px solid var(--site-danger, #b74747); padding-inline-start: 12px; }
+#tmNotifications .notification-service-hint { color: var(--site-secondary, var(--muted)); line-height: 1.7; }
+@media (max-width: 560px) {
+  .team-management-dialog .tm-tabs { overflow-x: auto; }
+  .team-management-dialog .tm-tabs button { min-width: max-content; padding: 12px 10px; }
+  #tmNotifications .notification-section { padding: 14px; }
+  #tmNotifications .notification-actions button { flex: 1 1 auto; }
+  #tmNotifications .notification-schedule-fields { grid-template-columns: minmax(0,1fr); }
+}

@@ -11,6 +11,13 @@ from django.core.files.storage import default_storage
 from .services import build_weeks, cleanup_semester, settle_week, validate_week_dates
 
 
+@shared_task(soft_time_limit=115, time_limit=120)
+def send_astrbot_notifications():
+    from .astrbot_notifications import deliver_pending, queue_weekly_reminders
+    queued = queue_weekly_reminders()
+    return {'weekly_queued': queued, 'delivered': deliver_pending(limit=3)}
+
+
 @shared_task
 def settle_and_cleanup():
     now = timezone.now()
