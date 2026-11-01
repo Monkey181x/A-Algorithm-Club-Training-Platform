@@ -18,6 +18,18 @@ class SolvedProblemCredit(models.Model):
         constraints = [models.UniqueConstraint(fields=['user', 'source', 'problem_key'], name='unique_user_solved_credit')]
 
 
+class DatedSolvedProblemCredit(models.Model):
+    """Dated evidence survives source cleanup without inventing historical AC dates."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='dated_solved_credits')
+    source = models.CharField(max_length=16)
+    problem_key = models.CharField(max_length=1100)
+    solved_on = models.DateField(db_index=True)
+    time_verified = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['user', 'source', 'problem_key', 'solved_on'], name='unique_user_dated_solved_credit')]
+
+
 class ContestCalendarSnapshot(models.Model):
     platform = models.CharField(max_length=20, unique=True)
     contests = models.JSONField(default=list)
@@ -571,6 +583,17 @@ class PlatformBinding(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=['user', 'platform'], name='unique_user_platform')]
 
+
+class PlatformSolvedBaseline(models.Model):
+    binding = models.OneToOneField(PlatformBinding, on_delete=models.CASCADE, related_name='solved_baseline')
+    total = models.PositiveIntegerField(null=True)
+    problem_ids = models.JSONField(default=list)
+    ids_complete = models.BooleanField(default=False)
+    dated_problems = models.JSONField(default=dict)
+    captured_at = models.DateTimeField(null=True)
+    checked_at = models.DateTimeField(default=timezone.now)
+    error = models.CharField(max_length=240, blank=True)
+    notes = models.JSONField(default=list)
 
 def default_problem_rewards():
     return {'beginner': [1, 2, 3], 'experienced': [1, 2, 3]}

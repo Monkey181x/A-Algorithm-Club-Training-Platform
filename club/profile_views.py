@@ -26,12 +26,20 @@ def avatar_url(user, size='large'):
 def serialize_binding(binding):
     pending = binding.status == 'pending'
     expired = pending and binding.requested_at < timezone.now() - timedelta(minutes=4)
+    from .models import PlatformSolvedBaseline
+    try:
+        baseline=binding.solved_baseline
+    except PlatformSolvedBaseline.DoesNotExist:
+        baseline=None
     return {
         'platform': binding.platform, 'account': binding.account,
         'snapshot': binding.snapshot,
         'status': 'failed' if expired else binding.status,
         'error': '同步超时，请重新同步' if expired else binding.error,
         'synced_at': binding.synced_at.isoformat() if binding.synced_at else None,
+        'solved_baseline': {'total':baseline.total,'known_dates':len(baseline.dated_problems),
+            'captured_at':baseline.captured_at.isoformat() if baseline.captured_at else None,
+            'error':baseline.error} if baseline else None,
     }
 
 
@@ -47,7 +55,7 @@ def profile_data(request):
             'avatar_small': avatar_images.url_for(personal, member.pk, 'small'),
             'member_id': member.pk, 'member_avatar': avatar_images.url_for(personal, member.pk, 'small'),
             'platforms': PLATFORMS,
-            'bindings': [serialize_binding(b) for b in request.user.platform_bindings.all()]}
+            'bindings': [serialize_binding(b) for b in request.user.platform_bindings.select_related('solved_baseline')]}
 
 
 def eligible(request):
@@ -229,6 +237,9 @@ def platform_binding(request, platform):
                 binding = PlatformBinding(user=request.user, platform=platform)
             if changed:
                 binding.snapshot = {}; binding.synced_at = None
+                if binding.pk:
+                    from .models import PlatformSolvedBaseline
+                    PlatformSolvedBaseline.objects.filter(binding=binding).delete()
             binding.account = account
         binding.sync_token = uuid.uuid4()
         binding.requested_at = timezone.now()

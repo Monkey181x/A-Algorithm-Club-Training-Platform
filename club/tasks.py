@@ -69,19 +69,44 @@ def purge_files():
 
 @shared_task(soft_time_limit=155, time_limit=165, priority=2)
 def sync_platform_binding(binding_id, token):
-    from .models import PlatformBinding
+    from django.db import transaction
+    from .models import PlatformBinding, PlatformSolvedBaseline
     from .platform_sync import fetch_snapshot, SyncError
     binding = PlatformBinding.objects.filter(pk=binding_id, sync_token=token, status='pending').first()
     if not binding:
         return
     try:
-        snapshot = fetch_snapshot(binding.platform, binding.account)
-        PlatformBinding.objects.filter(pk=binding_id, sync_token=token).update(
-            snapshot=snapshot, status='ready', error='', synced_at=timezone.now())
+        baseline = PlatformSolvedBaseline.objects.filter(binding=binding, total__isnull=False).first()
+        snapshot = fetch_snapshot(binding.platform, binding.account, include_solved=baseline is None)
+        baseline_data = snapshot.pop('_solved_baseline', None)
+        with transaction.atomic():
+            current = PlatformBinding.objects.select_for_update().filter(pk=binding_id, sync_token=token,
+                account=binding.account, status='pending').first()
+            if not current:
+                return
+            if baseline is None and baseline_data is not None:
+                defaults={'checked_at':timezone.now(),'error':baseline_data.get('error',''),
+                    'notes':baseline_data.get('notes',[])}
+                if 'total' in baseline_data:
+                    defaults.update(total=baseline_data['total'],problem_ids=baseline_data.get('problem_ids',[]), ids_complete=baseline_data.get('ids_complete',False),
+                        dated_problems=baseline_data.get('dated_problems',{}),captured_at=timezone.now())
+                baseline,_=PlatformSolvedBaseline.objects.update_or_create(binding=current,defaults=defaults)
+            if baseline and baseline.total is not None:
+                snapshot['solved']=baseline.total
+                snapshot['solved_label']='绑定时过题基线（后续比赛 AC 计入榜单）'
+                snapshot.setdefault('notes',[]).extend(baseline.notes)
+            elif baseline_data and baseline_data.get('error'):
+                snapshot.setdefault('notes',[]).append('过题基线未建立：'+baseline_data['error'])
+            PlatformBinding.objects.filter(pk=current.pk).update(
+                snapshot=snapshot, status='ready', error='', synced_at=timezone.now())
     except Exception as exc:
         # Do not expose credentials, URLs with user input, or response bodies.
         message = str(exc)[:240] if isinstance(exc, SyncError) else '平台数据读取失败，请稍后重试或检查账号与凭据'
-        PlatformBinding.objects.filter(pk=binding_id, sync_token=token).update(status='failed', error=message)
+        with transaction.atomic():
+            current=PlatformBinding.objects.select_for_update().filter(pk=binding_id,sync_token=token,account=binding.account).first()
+            if current:
+                PlatformSolvedBaseline.objects.get_or_create(binding=current,defaults={'error':message})
+                PlatformBinding.objects.filter(pk=current.pk).update(status='failed', error=message)
 
 
 @shared_task(soft_time_limit=750, time_limit=780)

@@ -98,7 +98,7 @@ def optional(result, label, operation):
         result.setdefault('notes', []).append(f'{label}暂未获取，已保留其他可用资料')
 
 
-def codeforces(remote, account):
+def codeforces(remote, account, *, include_solved=True):
     handle = quote(account, safe='')
     def api(method, params):
         data = remote.json(f'https://codeforces.com/api/{method}?{params}')
@@ -124,11 +124,12 @@ def codeforces(remote, account):
         keys = {(r['problem'].get('contestId'), r['problem'].get('index'), r['problem'].get('name')) for r in accepted}
         return {'solved': len(keys), 'solved_label': '最近 1000 次提交中的去重 AC' if len(rows) == 1000 else '公开提交去重 AC',
                 'accepted_submissions': len(accepted)}
-    optional(result, '做题统计', solved)
+    if include_solved:
+        optional(result, '做题统计', solved)
     return result
 
 
-def atcoder(remote, account):
+def atcoder(remote, account, *, include_solved=True):
     handle = quote(account, safe='')
     rows = remote.json(f'https://atcoder.jp/users/{handle}/history/json')
     if not isinstance(rows, list) or any('IsRated' not in r for r in rows):
@@ -146,11 +147,12 @@ def atcoder(remote, account):
         if not isinstance(count, int):
             raise SyncError('做题统计格式异常')
         return {'solved': count, 'solved_label': 'AtCoder Problems 去重 AC'}
-    optional(result, '做题统计', solved)
+    if include_solved:
+        optional(result, '做题统计', solved)
     return result
 
 
-def leetcode(remote, account):
+def leetcode(remote, account, *, include_solved=True):
     china = account.startswith('cn:')
     user = account[3:] if china else account
     base = 'https://leetcode.cn' if china else 'https://leetcode.com'
@@ -189,7 +191,7 @@ def leetcode(remote, account):
     return result
 
 
-def luogu(remote, account):
+def luogu(remote, account, *, include_solved=True):
     headers = {'Referer': 'https://www.luogu.com.cn/', 'x-lentille-request': 'content-only'}
     def payload(url):
         text = remote.text(url, headers=headers)
@@ -224,13 +226,14 @@ def luogu(remote, account):
         if not isinstance(data.get('passed'), list):
             raise SyncError('通过题目列表暂不可用')
         return {'solved': len(data['passed']), 'solved_label': '累计通过题数'}
-    optional(result, '做题统计', practice)
+    if include_solved:
+        optional(result, '做题统计', practice)
     return result
 
 
-def nowcoder(remote, account):
+def nowcoder(remote, account, *, include_solved=True):
     base = f'https://ac.nowcoder.com/acm/contest/profile/{account}'
-    text = remote.text(base + '/practice-coding?languageCategoryFilter=-1&orderType=DESC&page=1&pageSize=200&statusTypeFilter=5', headers={'Referer': 'https://ac.nowcoder.com/'})
+    text = remote.text(base + ('/practice-coding?languageCategoryFilter=-1&orderType=DESC&page=1&pageSize=200&statusTypeFilter=5' if include_solved else ''), headers={'Referer': 'https://ac.nowcoder.com/'})
     if not re.search(r'window\.curUser\.id\s*=\s*[\"\']' + re.escape(account) + r'[\"\']', text):
         raise SyncError('牛客账号不可公开访问或页面不匹配')
     soup = BeautifulSoup(text, 'html.parser')
@@ -242,6 +245,10 @@ def nowcoder(remote, account):
     if not soup.select('table'):
         result.pop('solved')
         result['notes'].append('公开提交表未能识别')
+    if not include_solved:
+        result.pop('solved',None)
+        result.pop('solved_label',None)
+        result.pop('notes',None)
     def ratings():
         data = remote.json(f'https://ac.nowcoder.com/acm/contest/rating-history?uid={account}', headers={'Referer': base})
         if data.get('code') != 0:
@@ -262,10 +269,18 @@ def nowcoder(remote, account):
     return result
 
 
-def fetch_snapshot(platform, account):
+def fetch_snapshot(platform, account, *, include_solved=True):
     remote = Remote()
     try:
-        return {'codeforces': codeforces, 'atcoder': atcoder, 'leetcode': leetcode,
-                'luogu': luogu, 'nowcoder': nowcoder}[platform](remote, account)
+        snapshot = {'codeforces': codeforces, 'atcoder': atcoder, 'leetcode': leetcode,
+                'luogu': luogu, 'nowcoder': nowcoder}[platform](remote, account,
+                    include_solved=include_solved and platform not in {'codeforces','nowcoder'})
+        if include_solved:
+            from .platform_solved import collect
+            try:
+                snapshot['_solved_baseline'] = collect(remote,platform,account,snapshot)
+            except (SyncError,KeyError,TypeError,ValueError) as error:
+                snapshot['_solved_baseline'] = {'error':str(error)[:240] if isinstance(error,SyncError) else '平台过题基线暂不可获取'}
+        return snapshot
     finally:
         remote.session.close()

@@ -38,11 +38,12 @@
 
 let adminTestMode = false;
 const rankingData = {};
-const rankingKey = (scope, platform='codeforces') => scope === 'rating' ? `${scope}:${platform}` : scope;
+const rankingKey = (scope, platform='codeforces', period='semester') => scope === 'rating' ? `${scope}:${platform}` : scope === 'solved' ? `${scope}:${period}` : scope;
 function rankingSelection(target) {
   const panel = document.querySelector(target)?.closest('.panel');
   return {scope: panel?.querySelector('[data-ranking].active')?.dataset.ranking || 'checkin',
-    platform: panel?.querySelector('[data-rating-platform]')?.value || 'codeforces', panel};
+    platform: panel?.querySelector('[data-rating-platform]')?.value || 'codeforces',
+    period: panel?.querySelector('[data-solved-period]')?.value || 'semester', panel};
 }
 
 const pageTitles = {settings:'设置',extensions:'拓展', dashboard:'总览', submissions:'我的提交', leaderboard:'排行榜', showcase:'团队提交', members:'成员列表', contests:'赛事中心', admin:'管理工作台', rbcshop:'RBC商店'};
@@ -155,10 +156,10 @@ function renderTrainingActivity(){
   $('#activityPeriod').textContent=semester?(data.semester?.name||'当前学期'):'近四个月 · 截至 '+data.end.slice(0,7).replace('-',' 年 ')+' 月';
   $('#activityMonthLabel').hidden=semester;
   $('#activityHeatmap').dataset.range=semester?'semester':'month';
-  $('#activityHeatmap').innerHTML=`<div class="activity-weekdays" aria-hidden="true">${['一','二','三','四','五','六','日'].map(n=>`<span>${n}</span>`).join('')}</div>${renderActivityMonths(data.days,metric,unit,data.today)}`;
+  $('#activityHeatmap').innerHTML=`<div class="activity-weekdays" aria-hidden="true">${['一','二','三','四','五','六','日'].map(n=>`<span>${n}</span>`).join('')}</div>${renderActivityMonths(data.days,'ac','题',data.today)}`;
   wireActivityHeatScroll();
-  $('#activityNote').hidden=true;
-  $('#activityNote').textContent='';
+  $('#activityNote').hidden=!data.ac?.undated;
+  $('#activityNote').textContent=data.ac?.undated ? `另有 ${data.ac.undated} 题日期未知，仅计入总榜，不计入学期榜和热力图。` : '';
   const day=data.days.find(d=>d.date===selectedPulseDate)||data.days.find(d=>d.isToday)||[...data.days].reverse().find(d=>d.date<=data.today)||data.days[0];
   if(day){updatePulseDay(day);selectPulseDay(day.date);}
 }
@@ -214,9 +215,11 @@ function renderLeaderboard(mode='checkin', target='#leaderboardList') {
   const el = $(target);
   if (!el) return;
   const selection = rankingSelection(target);
-  const allRows = rankingData[rankingKey(selection.scope,selection.platform)];
+  const allRows = rankingData[rankingKey(selection.scope,selection.platform,selection.period)];
   const rows = target === '#leaderboardList' ? allRows?.filter(row => row.isCurrent) : allRows;
-  const filter = selection.panel?.querySelector('.rating-platform-filter');
+  const filter = selection.panel?.querySelector('.rating-platform-filter:not(.solved-period-filter)');
+  const solvedFilter = selection.panel?.querySelector('.solved-period-filter');
+  if (solvedFilter) solvedFilter.hidden = selection.scope !== 'solved';
   if (filter) filter.hidden = selection.scope !== 'rating';
   el.innerHTML = !rows ? '<div class="queue-empty" role="status">正在加载榜单…</div>' : !rows.length
     ? `<div class="queue-empty">${target === '#leaderboardList' ? '你在当前榜单暂无排名' : selection.scope === 'rating' ? '当前团队暂无绑定此平台的成员' : '暂无排行榜数据'}</div>`
@@ -258,8 +261,8 @@ function setView(view, {preserveContent=false}={}) {
     }, 1120);
   }
   window.scrollTo({top:0, behavior:'smooth'});
-  if (view === 'dashboard') {const selected=rankingSelection('#leaderboardList');loadLeaderboard(selected.scope,selected.platform);}
-  if (view === 'leaderboard') { const selected = rankingSelection('#leaderboardListFull'); renderLeaderboard(selected.scope, '#leaderboardListFull'); loadLeaderboard(selected.scope,selected.platform); }
+  if (view === 'dashboard') {const selected=rankingSelection('#leaderboardList');loadLeaderboard(selected.scope,selected.platform,{period:selected.period});}
+  if (view === 'leaderboard') { const selected = rankingSelection('#leaderboardListFull'); renderLeaderboard(selected.scope, '#leaderboardListFull'); loadLeaderboard(selected.scope,selected.platform,{period:selected.period}); }
   if (!demoMode && previousView === 'admin' && view !== 'admin') stopAdminQueuePolling();
   if (!demoMode && view === 'admin') startAdminQueuePolling();
   if (!demoMode && view === 'submissions' && !preserveContent) loadMySubmissions();
@@ -1071,7 +1074,13 @@ function wireRankingControls(root=document) {
     const target = panel?.classList.contains('full-leaderboard') ? '#leaderboardListFull' : '#leaderboardList';
     const selected = rankingSelection(target);
     renderLeaderboard(selected.scope,target);
-    await loadLeaderboard(selected.scope,selected.platform);
+    await loadLeaderboard(selected.scope,selected.platform,{period:selected.period});
+  }));
+  $$('[data-solved-period]', root).forEach(select => select.addEventListener('change',async () => {
+    const target = select.closest('.full-leaderboard') ? '#leaderboardListFull' : '#leaderboardList';
+    const selected = rankingSelection(target);
+    renderLeaderboard('solved',target);
+    await loadLeaderboard('solved',selected.platform,{period:select.value});
   }));
   $$('[data-rating-platform]', root).forEach(select => select.addEventListener('change',async () => {
     const target = select.closest('.full-leaderboard') ? '#leaderboardListFull' : '#leaderboardList';
@@ -1252,25 +1261,25 @@ async function loadDashboardSummary({forceMine = false} = {}) {
   return dashboard;
 }
 
-async function loadLeaderboard(scope = 'checkin', platform='codeforces', {force=false} = {}) {
-  const key = rankingKey(scope,platform);
+async function loadLeaderboard(scope = 'checkin', platform='codeforces', {force=false,period='semester'} = {}) {
+  const key = rankingKey(scope,platform,period);
   if (!force && leaderboardInFlight.has(key)) return leaderboardInFlight.get(key);
   const request = (async () => {
     try {
-      const response = await clubApi.request(`/api/leaderboard?scope=${encodeURIComponent(scope)}&platform=${encodeURIComponent(platform)}`);
+      const response = await clubApi.request(`/api/leaderboard?scope=${encodeURIComponent(scope)}&platform=${encodeURIComponent(platform)}&period=${encodeURIComponent(period)}`);
       const payload = await response.json();
       if (leaderboardInFlight.get(key) !== request) return false;
       if (!response.ok) throw new Error(payload.error || '榜单加载失败');
       rankingData[key] = payload.rows || [];
       for (const target of ['#leaderboardList','#leaderboardListFull']) {
         const selected = rankingSelection(target);
-        if (rankingKey(selected.scope,selected.platform) === key) renderLeaderboard(scope,target);
+        if (rankingKey(selected.scope,selected.platform,selected.period) === key) renderLeaderboard(scope,target);
       }
       return true;
     } catch (error) {
       for (const target of ['#leaderboardList','#leaderboardListFull']) {
         const selected = rankingSelection(target);
-        if (rankingKey(selected.scope,selected.platform) === key && !rankingData[key]) $(target).innerHTML = `<div class="queue-empty" role="alert">${escapeHtml(error.message)}</div>`;
+        if (rankingKey(selected.scope,selected.platform,selected.period) === key && !rankingData[key]) $(target).innerHTML = `<div class="queue-empty" role="alert">${escapeHtml(error.message)}</div>`;
       }
       return false;
     }
@@ -1282,13 +1291,13 @@ async function loadLeaderboard(scope = 'checkin', platform='codeforces', {force=
 
 async function refreshAfterMutation({refreshAdmin = false} = {}) {
   const selections=new Map(['#leaderboardList','#leaderboardListFull'].map(target=>{
-    const selected=rankingSelection(target);return [rankingKey(selected.scope,selected.platform),selected];
+    const selected=rankingSelection(target);return [rankingKey(selected.scope,selected.platform,selected.period),selected];
   }));
   const tasks = [
     window.CurrencyModule?.init(),
     loadRecentActivity({force: true}),
     loadDashboardSummary({forceMine:true}),
-    ...[...selections.values()].map(selected=>loadLeaderboard(selected.scope,selected.platform,{force:true})),
+    ...[...selections.values()].map(selected=>loadLeaderboard(selected.scope,selected.platform,{force:true,period:selected.period})),
   ];
   if (currentView === 'submissions') tasks.push(loadMySubmissions());
   if (refreshAdmin && currentView === 'admin') tasks.push(loadAdminQueue());
@@ -1297,6 +1306,7 @@ async function refreshAfterMutation({refreshAdmin = false} = {}) {
   renderLeaderboard('checkin','#leaderboardListFull');
 }
 
+window.addEventListener('platform-solved-updated', () => refreshAfterMutation());
 window.addEventListener('personal-profile-saved', event => {
   const id = Number(event.detail?.memberId);
   const source = event.detail?.avatar;

@@ -755,7 +755,7 @@ def leaderboard(request):
     if scope not in {'checkin', 'rating', 'solved', 'wealth'}:
         return api_error('请选择签到榜、Rating榜、过题榜或财富榜')
     try:
-        return JsonResponse(ranking_data(membership, scope, request.GET.get('platform','codeforces')))
+        return JsonResponse(ranking_data(membership, scope, request.GET.get('platform','codeforces'), request.GET.get('period','semester')))
     except ValueError as exc:
         return api_error(str(exc))
 
