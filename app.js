@@ -1501,7 +1501,7 @@ async function openLiveMemberHistory(memberId, page = 1) {
       $('#historyMemberTitle').innerHTML=MemberTitles.list(payload.member.titles||payload.member.title);
       $('#historySquad').innerHTML=MemberTitles.cohort(payload.member.cohort);
       $('#historyMemberSummary').textContent=`已绑定 ${payload.bindings.length} / 5 个平台 · ${payload.total} 条提交`;
-      $('#historyIdentity').textContent = [payload.member.role==='admin'?'团队管理员':'普通成员',payload.member.grade_label].filter(Boolean).join(' · ');
+      $('#historyIdentity').textContent = payload.member.role==='admin'?'团队管理员':'普通成员';
       setDetailAvatar($('#historyAvatar'),memberId,payload.member.name,payload.member.avatar);
       memberPlatformCards(payload);
     }
