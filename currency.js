@@ -457,16 +457,47 @@ const CurrencyModule = (() => {
     } finally { consumableUsesInFlight.delete(inventoryId); }
   }
   let shopRenderVersion = 0;
+  function bindShopTabs(container) {
+    const tabs = container.querySelector('.shop-tabs');
+    if (typeof syncSegmented === 'function') syncSegmented(tabs);
+    const buttons = [...tabs.querySelectorAll('[data-shop-tab]')];
+    buttons.forEach((button, index) => {
+      button.addEventListener('click', async () => {
+        if (container.dataset.shopTab === button.dataset.shopTab) return;
+        container.dataset.shopTab = button.dataset.shopTab;
+        await renderShopView(container);
+        if (container.dataset.shopTab === button.dataset.shopTab)
+          container.querySelector(`[data-shop-tab="${button.dataset.shopTab}"]`)?.focus();
+      });
+      button.addEventListener('keydown', event => {
+        if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+        event.preventDefault();
+        buttons[event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1-index].click();
+      });
+    });
+  }
+  function showShopLoading(container, backpack) {
+    const tab = backpack ? 'inventory' : 'shop';
+    if (container.querySelector('.shop-grid') && container.dataset.renderedShopTab === tab) return;
+    container.dataset.renderedShopTab = tab;
+    container.innerHTML = `<section class="page-heading"><div><p class="kicker">RBC SHOP</p><h1>RBC商店</h1></div>
+      <div class="currency-display">${currencyData.currencyIcon ? `<img src="${escape(currencyData.currencyIcon)}" alt="RBC" class="currency-icon-large" />` : '<span class="currency-icon-large">💎</span>'}<div><strong>${currencyData.balance}</strong><small>RBC Coins</small></div></div></section>
+      <section class="panel"><div class="segmented shop-tabs" role="tablist" aria-label="商店与背包">
+      <button class="segment ${!backpack ? 'active' : ''}" type="button" data-shop-tab="shop">商店</button><button class="segment ${backpack ? 'active' : ''}" type="button" data-shop-tab="inventory">背包</button></div>
+      <div class="shop-grid" aria-busy="true" aria-label="正在加载${backpack ? '背包' : '商品'}">${Array.from({length:3},()=>`<div class="shop-item-card shop-card-placeholder" aria-hidden="true"><div class="shop-item-icon is-image-loading"><span class="skeleton shop-image-placeholder"></span></div><div class="shop-item-info"><span class="skeleton shop-text-placeholder"></span><span class="skeleton shop-text-placeholder"></span></div><div class="shop-item-footer"><span class="skeleton shop-text-placeholder"></span></div></div>`).join('')}</div></section>`;
+    bindShopTabs(container);
+  }
   async function renderShopView(container) {
     const version = ++shopRenderVersion;
-    const [items, inventoryResult] = await Promise.all([loadShopItems(),
-      window.clubApi.request('/api/currency/inventory').then(async response => {
+    const backpack = container.dataset.shopTab === 'inventory';
+    showShopLoading(container, backpack);
+    const [items, inventoryResult] = await Promise.all([backpack ? [] : loadShopItems(),
+      backpack ? window.clubApi.request('/api/currency/inventory').then(async response => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '背包加载失败');
         return data.inventory || [];
-      }).then(items => ({items}), error => ({error:error.message}))]);
+      }).then(items => ({items}), error => ({error:error.message})) : {items:[]}]);
     if (version !== shopRenderVersion) return;
-    const backpack = container.dataset.shopTab === 'inventory';
     const displayItems = backpack ? (inventoryResult.items || []).map(item => ({
       ...item, id:item.item_id, name:item.item_name,
     })) : items;
@@ -497,8 +528,8 @@ const CurrencyModule = (() => {
           ${backpack && inventoryResult.error ? `<div class="empty-state" role="alert">${escape(inventoryResult.error)}<button class="text-button" data-inventory-retry type="button">重试</button></div>` : displayItems.length === 0 ? `<div class="empty-state">${backpack ? '背包里还没有物品' : '暂无商品'}</div>` : displayItems.map(item => `
             <div class="shop-item-card${!backpack && item.purchase_limit_reached ? ' is-limit-reached' : ''}${!backpack && item.purchase_blocked ? ' is-purchase-blocked' : ''}">
               ${!backpack && item.purchase_limit_reached ? '<img class="shop-limit-stamp" src="/static/images/purchase-limit-stamp.png" alt="已达购买上限" />' : ''}
-              <div class="shop-item-icon">
-                ${item.icon ? `<img src="${escape(item.icon)}" alt="${escape(item.name)}" />` : '<span class="placeholder-icon">📦</span>'}
+              <div class="shop-item-icon${item.icon ? ' is-image-loading' : ''}" ${item.icon ? `data-shop-image="${escape(item.icon)}" data-image-alt="${escape(item.name)}" aria-busy="true"` : ''}>
+                ${item.icon ? '<span class="skeleton shop-image-placeholder" aria-hidden="true"></span>' : '<span class="placeholder-icon">📦</span>'}
               </div>
               <div class="shop-item-info">
                 <h3>${escape(item.name)}</h3>
@@ -534,23 +565,8 @@ const CurrencyModule = (() => {
       </section>
     `;
 
-    const tabs = container.querySelector('.shop-tabs');
-    if (typeof syncSegmented === 'function') syncSegmented(tabs);
-    const buttons = [...tabs.querySelectorAll('[data-shop-tab]')];
-    buttons.forEach((button, index) => {
-      button.addEventListener('click', async () => {
-        if (container.dataset.shopTab === button.dataset.shopTab) return;
-        container.dataset.shopTab = button.dataset.shopTab;
-        if (typeof syncSegmented === 'function') syncSegmented(tabs, button);
-        await renderShopView(container);
-        container.querySelector(`[data-shop-tab="${button.dataset.shopTab}"]`)?.focus();
-      });
-      button.addEventListener('keydown', event => {
-        if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
-        event.preventDefault();
-        buttons[event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1-index].click();
-      });
-    });
+    window.ShopImages.mount(container);
+    bindShopTabs(container);
     container.querySelector('[data-inventory-retry]')?.addEventListener('click', () => renderShopView(container));
 
     if (currencyData.siteAdmin && !backpack) {

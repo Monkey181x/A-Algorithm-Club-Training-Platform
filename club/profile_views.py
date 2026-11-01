@@ -1,23 +1,26 @@
 """Own-account profile editing and explicitly requested platform synchronization."""
-import io
 import uuid
 from datetime import timedelta
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
+from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import FileResponse, Http404, JsonResponse, HttpResponseNotModified
+from django.utils.cache import patch_vary_headers
+from django.utils.http import parse_etags
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from .models import FileDeletion, PlatformBinding, UserProfile, TeamMembership
 from .views import api_login_required, api_error, body, membership_for
 from .platform_sync import PLATFORMS, validate_account
+from . import avatar_images
 
 
-def avatar_url(user):
+def avatar_url(user, size='large'):
     profile = UserProfile.objects.filter(user=user).first()
-    return '/api/profile/avatar' if profile and profile.avatar else None
+    return avatar_images.url_for(profile, size=size)
 
 
 def serialize_binding(binding):
@@ -40,7 +43,9 @@ def profile_data(request):
     return {'name': member.display_name, 'account': request.user.username,
             'grade': grade, 'grade_label': GRADES[grade] if grade is not None else '注册资料缺失，请联系管理员',
             'grade_options': GRADES,
-            'team_name': member.team.name, 'avatar': avatar_url(request.user),
+            'team_name': member.team.name, 'avatar': avatar_images.url_for(personal),
+            'avatar_small': avatar_images.url_for(personal, member.pk, 'small'),
+            'member_id': member.pk, 'member_avatar': avatar_images.url_for(personal, member.pk, 'small'),
             'platforms': PLATFORMS,
             'bindings': [serialize_binding(b) for b in request.user.platform_bindings.all()]}
 
@@ -67,37 +72,40 @@ def profile(request):
         return api_error('昵称需为 1–40 个字符', 400)
     upload = request.FILES.get('avatar')
     avatar = None
+    thumbnail = None
     if upload:
         if upload.size > 3 * 1024 * 1024:
             return api_error('头像不能超过 3 MB', 400)
         try:
-            image = Image.open(upload)
-            if image.format not in {'PNG', 'JPEG', 'WEBP'} or image.width * image.height > 16000000:
-                raise ValueError()
-            image = ImageOps.exif_transpose(image).convert('RGB')
-            image = ImageOps.fit(image, (256, 256))
-            output = io.BytesIO(); image.save(output, format='JPEG', quality=88)
-            avatar = ContentFile(output.getvalue(), name=f'{uuid.uuid4().hex}.jpg')
+            avatar, thumbnail = avatar_images.prepare_upload(upload)
         except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
             return api_error('请上传有效的 PNG、JPEG 或 WebP 图片（最多 1600 万像素）', 400)
-    stored = None
+    stored = []
     try:
         with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
             member = TeamMembership.objects.select_for_update().get(pk=member.pk)
             member.display_name = name
             member.save(update_fields=['display_name'])
             personal, _ = UserProfile.objects.get_or_create(user=request.user)
             if avatar:
                 old = personal.avatar.name
-                personal.avatar = avatar
+                storage = personal.avatar.storage
+                name = storage.save(f'avatars/{uuid.uuid4().hex}.jpg', ContentFile(avatar))
+                stored.append(name)
+                small = storage.save(avatar_images.thumbnail_name(name), ContentFile(thumbnail))
+                stored.append(small)
+                personal.avatar = name
                 personal.save(update_fields=['avatar'])
-                stored = personal.avatar.name
                 if old:
                     FileDeletion.objects.create(name=old)
-    except IntegrityError:
-        if stored:
-            FileDeletion.objects.create(name=stored)
-        return api_error('当前团队中已有此昵称，请换一个昵称', 409)
+                    FileDeletion.objects.create(name=avatar_images.thumbnail_name(old))
+    except Exception as error:
+        for name in stored:
+            FileDeletion.objects.create(name=name)
+        if isinstance(error, IntegrityError):
+            return api_error('当前团队中已有此昵称，请换一个昵称', 409)
+        raise
     return JsonResponse(profile_data(request))
 
 
@@ -148,11 +156,33 @@ def avatar(request, member_id=None):
     personal = UserProfile.objects.filter(user=user).first()
     if not personal or not personal.avatar:
         raise Http404
+    size = request.GET.get('size', 'large')
+    if size not in {'small', 'large'}:
+        return api_error('头像尺寸无效', 400)
     try:
-        response = FileResponse(personal.avatar.open('rb'), content_type='image/jpeg')
-    except FileNotFoundError:
+        name = avatar_images.ensure_thumbnail(personal) if size == 'small' else personal.avatar.name
+        token = avatar_images.version(personal.avatar.name)
+        etag = f'"{token}-{size}"'
+        matches = parse_etags(request.headers.get('If-None-Match', ''))
+        if '*' in matches or etag in matches or 'W/' + etag in matches:
+            response = HttpResponseNotModified()
+        else:
+            file = personal.avatar.storage.open(name, 'rb')
+            try:
+                content_type = Image.MIME.get(Image.open(file).format, 'image/jpeg')
+                file.seek(0)
+                response = FileResponse(file, content_type=content_type)
+            except Exception:
+                file.close()
+                raise
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
         raise Http404
-    response['Cache-Control'] = 'private, no-store'
+    response['ETag'] = etag
+    response['Cache-Control'] = 'private, max-age=86400, immutable' if request.GET.get('v') == token else 'private, no-cache'
+    # Authenticated team images must never enter a shared CDN cache.
+    response['CDN-Cache-Control'] = 'no-store'
+    response['Surrogate-Control'] = 'no-store'
+    patch_vary_headers(response, ['Cookie'])
     response['X-Content-Type-Options'] = 'nosniff'
     return response
 

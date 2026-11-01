@@ -159,7 +159,10 @@ class CurrencyIntegrationTests(TestCase):
                         'icon': 'data:image/' + image_format.lower() + ';base64,' + base64.b64encode(data).decode(),
                     }), content_type='application/json')
                     self.assertEqual(response.status_code, 200)
-                    url = f'/api/currency/shop/items/{item.pk}/icon'
+                    from .currency_views import shop_item_icon_url
+                    item.refresh_from_db()
+                    url = shop_item_icon_url(item)
+                    self.assertIn('?v=', url)
                     for client, path in [(self.client, '/api/currency/admin/shop'),
                                          (member_client, '/api/currency/shop/items')]:
                         rows = client.get(path).json()['items']

@@ -39,7 +39,10 @@ def protect_admin_deletion(sender, instance, **kwargs):
         raise ValidationError('不能删除唯一管理员')
     from .models import FileDeletion,SubmissionPart,UserProfile,ContestSubmission
     names=set(SubmissionPart.objects.filter(submission__member__user=instance).exclude(upload='').values_list('upload',flat=True))
-    names.update(UserProfile.objects.filter(user=instance).exclude(avatar='').values_list('avatar',flat=True))
+    from .avatar_images import thumbnail_name
+    avatars = list(UserProfile.objects.filter(user=instance).exclude(avatar='').values_list('avatar',flat=True))
+    names.update(avatars)
+    names.update(thumbnail_name(name) for name in avatars)
     names.update(ContestSubmission.objects.filter(member__user=instance).exclude(screenshot='').values_list('screenshot',flat=True))
     FileDeletion.objects.bulk_create([FileDeletion(name=name) for name in names if name])
 

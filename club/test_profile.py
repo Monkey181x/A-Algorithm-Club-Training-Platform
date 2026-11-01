@@ -70,7 +70,10 @@ class ProfileTests(TestCase):
         self.member.role = 'admin'; self.member.save()
         self.assertEqual(self.client.get('/api/profile').status_code, 200)
         self.client.force_login(self.root)
-        self.assertEqual(self.client.get('/api/profile').status_code, 403)
+        response = self.client.get('/api/profile')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['read_only'])
+        self.assertEqual(self.client.post('/api/profile', {'name':'Attempt'}).status_code, 403)
         csrf = Client(enforce_csrf_checks=True); csrf.force_login(self.user)
         self.assertEqual(csrf.post('/api/profile', {'name':'Attempt'}).status_code, 403)
         self.assertEqual(csrf.put('/api/profile/platforms/codeforces', '{}', content_type='application/json').status_code, 403)
@@ -98,7 +101,7 @@ class ProfileTests(TestCase):
             response = self.client.get(url)
             content = b''.join(response.streaming_content)
             with Image.open(io.BytesIO(content)) as decoded:
-                self.assertEqual(decoded.size, (256,256)); self.assertEqual(decoded.format, 'JPEG')
+                self.assertEqual(decoded.size, (40,20)); self.assertEqual(decoded.format, 'JPEG')
             old = UserProfile.objects.get(user=self.user).avatar.name
             self.assertEqual(self.client.post('/api/profile', {'avatar':image()}).status_code, 200)
             self.assertTrue(FileDeletion.objects.filter(name=old).exists())
