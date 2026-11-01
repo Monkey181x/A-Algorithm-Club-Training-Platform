@@ -13,6 +13,8 @@
     if (items.length < 2 || !indicator) return null;
     const axis = type === 'segment' ? 'x' : 'y';
     const rects = items.map(item => item.getBoundingClientRect());
+    // Wrapped tabs use taps and keyboard navigation; horizontal dragging assumes one row.
+    if (type === 'segment' && rects.some(rect => Math.abs(rect.top - rects[0].top) > 2)) return null;
     const centers = rects.map(rect => axis === 'x' ? rect.left + rect.width/2 : rect.top + rect.height/2);
     const selected = Math.max(0, items.findIndex(item => item.classList.contains('active')));
     return {group, type, items, indicator, axis, rects, centers, selected};
