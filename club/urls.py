@@ -1,6 +1,7 @@
 from django.urls import path
 from . import extension_views
 from . import member_management
+from . import notification_views
 from .activity_views import training_activity
 from . import profile_views
 from . import contest_progress_views
@@ -13,6 +14,7 @@ from .admin_test_mode import toggle as toggle_test_mode
 from . import shop_fulfillment
 
 urlpatterns = [
+    path('management/teams/<int:team_id>/notifications', notification_views.notification_settings),
     path('auth/registration-options', views.registration_options),
     path('members/<int:member_id>/profile', profile_views.member_profile),
     path('management/teams/<int:team_id>/members', member_management.member_list),
