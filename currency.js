@@ -335,7 +335,7 @@ const CurrencyModule = (() => {
       const data = await response.json();
 
       if (response.ok) {
-        alert(data.message || "比赛材料已保存，请在比赛日程同步核验奖励");
+        alert(data.message || "比赛材料已保存，请在赛事中心同步核验奖励");
         return true;
       } else {
         alert(data.error || "提交失败");
