@@ -126,17 +126,18 @@ def perform_checkin(member, *, day=None):
     if CheckinRecord.objects.filter(team=member.team, member=member, checkin_date=today).exists():
         raise ValueError("今日已签到")
 
+    from .reward_rules import daily_amount
+    daily_reward = daily_amount(member,today)
     # Create check-in record
     CheckinRecord.objects.create(
         team=member.team,
         member=member,
         checkin_date=today,
         is_makeup=False,
-        reward_amount=member.team.daily_checkin_reward,
+        reward_amount=daily_reward,
     )
 
     # Award daily check-in reward
-    daily_reward = member.team.daily_checkin_reward
     add_currency(member, daily_reward, CurrencyTransaction.CHECKIN, "每日签到")
 
     # Check for streak rewards
@@ -364,7 +365,9 @@ def settle_weekly_streak(member, day):
         run = run + 1 if monday + timedelta(days=offset) in dates else 0
         longest = max(longest, run)
     awarded = 0
-    for rule in StreakReward.objects.filter(team=member.team, days__lte=longest).order_by('days'):
+    from .reward_rules import streak_rules
+    for rule in streak_rules(member,monday):
+        if rule.days>longest or not rule.reward:continue
         grant, created = WeeklyStreakGrant.objects.get_or_create(team=member.team,user_id=member.user_id, week_start=monday,
             days=rule.days, defaults={'member':member,'amount':rule.reward})
         if created or grant.revoked_at:

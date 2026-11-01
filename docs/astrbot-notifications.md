@@ -2,7 +2,7 @@
 
 插件源码、API 协议、安装与目标会话配置见 [插件说明](../integrations/astrbot_plugin_club_notify/README.md)。
 
-平台端需要设置 `.env` 中的 `ASTRBOT_NOTIFY_URL`，并应用迁移（最新 `0042_team_notification_settings`），更新 web、worker、beat。
+平台端需要设置 `.env` 中的 `ASTRBOT_NOTIFY_URL`，并应用迁移（最新 `0044_merge_tracker_notifications`），更新 web、worker、beat。0044 仅衔接通知与 Tracker 的迁移依赖，不修改业务数据。
 在管理员“管理工作台 → 团队配置 → 通知配置”中开启通知、填写或随机生成并保存 api_token、选择四类通知独立开关。开启达标审核后，可设置每周几及几点（北京时间）。密钥加密保存，读取配置不回传原密钥；输入留空保留已有密钥。
 在 AstrBot 配置相同密钥、监听地址/端口和群聊/私聊 QQ 号列表，然后重载插件。多个团队各用独立密钥时，使用新版插件的“团队专属密钥”列表，每项填写 `团队ID=密钥`；配置专属密钥的团队不能使用其他团队或通用密钥冒充。
 `ASTRBOT_NOTIFY_TOKEN` 不再作为平台发送密钥；总开关默认关闭，需在管理页面配置。关闭总开关或某类通知时，取消尚未送达的同类消息，不回补关闭期间发生的事件。

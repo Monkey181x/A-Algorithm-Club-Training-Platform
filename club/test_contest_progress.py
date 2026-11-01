@@ -64,14 +64,18 @@ class ProgressTests(TestCase):
         self.problem.accepted=False
         self.assertEqual(reward_for(self.problem,self.member)[0],0)
 
-    def test_demo_clock_is_restricted_to_explicit_fixture_team(self):
+    def test_demo_records_never_receive_rewards(self):
         with patch('django.utils.timezone.now',return_value=REWARD_START-timedelta(days=1)):
             self.assertEqual(reward_for(self.problem,self.member)[0],0)
             self.contest.source_data={'demo':True,'demo_team_id':self.team.pk}
-            self.assertEqual(reward_for(self.problem,self.member)[0],1)
+            self.assertEqual(reward_for(self.problem,self.member)[0],0)
             self.contest.source_data={'demo':True,'demo_team_id':self.team.pk+1}
             self.assertEqual(reward_for(self.problem,self.member)[0],0)
         self.assertEqual(reward_for(self.problem,self.member)[0],0)
+        self.contest.source_data={'demo':True,'demo_team_id':self.team.pk}
+        self.assertEqual(reward_for(self.problem,self.member)[0],0)
+        self.contest.source_data={}
+        self.assertEqual(reward_for(self.problem,self.member)[0],1)
 
     def test_exactly_once_individual_then_batch_and_other_user(self):
         second=ContestProblemProgress.objects.create(participation=self.contest,problem_key='second',label='Q2',title='Two',accepted_at=REWARD_START+timedelta(minutes=10),

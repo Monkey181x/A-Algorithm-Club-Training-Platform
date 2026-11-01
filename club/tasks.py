@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from celery import shared_task
+from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils import timezone
@@ -76,6 +77,11 @@ def purge_files():
 
 @shared_task(soft_time_limit=155, time_limit=165, priority=2)
 def sync_platform_binding(binding_id, token):
+    from .models import PlatformBinding
+    modern = PlatformBinding.objects.filter(pk=binding_id, sync_token=token).first()
+    if modern and modern.sync_state.get('version') == 2:
+        from .platform_records import run_step
+        return run_step(binding_id, token)
     from django.db import transaction
     from .models import PlatformBinding, PlatformSolvedBaseline
     from .platform_sync import fetch_snapshot, SyncError
@@ -124,6 +130,8 @@ def discover_contest_progress(user_id, token):
     pending = []
     messages = {}
     for binding in PlatformBinding.objects.filter(user_id=user_id):
+        if binding.platform == 'qoj':
+            continue
         remote = Remote()
         try:
             rows = discover(remote, binding.platform, binding.account)
@@ -213,3 +221,152 @@ def refresh_contest_calendar():
     from .contest_views import refresh_calendar
     snapshots = refresh_calendar(force=True)
     return {platform: {'updated_at': row['updated_at'], 'error': row['error']} for platform,row in snapshots.items()}
+
+
+@shared_task(priority=0)
+def refresh_tracker_catalogs():
+    from .tracker_sources import KINDS
+    from .tracker_views import queue_refresh
+    for kind in KINDS:
+        queue_refresh(kind, True)
+
+
+@shared_task(soft_time_limit=155, time_limit=165, priority=0)
+def refresh_tracker_catalog(kind, token):
+    from django.db import transaction
+    from .models import TrackerCatalog
+    from .platform_sync import Remote
+    from .tracker_sources import fetch, qoj_problems
+    from .tracker_ratings import board_index, enrich
+    from bs4 import BeautifulSoup
+    catalog = TrackerCatalog.objects.filter(kind=kind, token=token, status='pending').first()
+    if not catalog:
+        return
+    expected = dict(catalog.refresh_state)
+    from copy import deepcopy
+    state = deepcopy(expected)
+    remote = Remote()
+    try:
+        items = {c['id']: c for c in catalog.contests}
+        done = False
+        if state.get('phase') == 'enrich':
+            ids = list(state['ids'])
+            if ids:
+                cid = ids.pop(0)
+                event = dict(items[cid])
+                event['problems'] = [dict(p) for p in event['problems']]
+                try:
+                    enrich(remote,event,state['boards'])
+                except Exception:
+                    pass
+                items[cid] = event
+            state['ids'] = ids
+            done = not ids
+        else:
+            batch,state,finished = fetch(kind,remote,state)
+            seen = set(state.get('seen',[]))
+            new_ids = {c['id'] for c in batch}
+            if kind == 'nowcoder' and batch and new_ids.issubset(seen):
+                raise ValueError('repeated catalog page')
+            seen.update(new_ids);state['seen'] = sorted(seen)
+            for event in batch:
+                previous = items.get(event['id'])
+                if previous:
+                    old = {p['key']:p for p in previous['problems']}
+                    for p in event['problems']:
+                        prior = old.get(p['key'])
+                        if prior:
+                            if p['title'] == p['label']:p['title'] = prior['title']
+                            for name in ('tier','difficulty_source','accepted_teams','total_teams'):
+                                if name in prior:p[name] = prior[name]
+                    if not event['problems']:event['problems'] = previous['problems']
+                items[event['id']] = event
+            done = finished
+            if finished and kind == 'icpc':
+                state.update(phase='enrich',boards=board_index(remote),ids=sorted(seen))
+                done = not state['ids']
+        if done and not items:
+            raise ValueError('empty catalog')
+        with transaction.atomic():
+            current = TrackerCatalog.objects.select_for_update().filter(pk=catalog.pk,token=token,status='pending').first()
+            if not current or current.refresh_state != expected:
+                return
+            current.contests = list(items.values())
+            current.error = ''
+            current.refresh_state = {} if done else state
+            current.requested_at = timezone.now()
+            if done:
+                current.status = 'ready';current.updated_at = timezone.now()
+            current.save()
+            if done and kind == 'icpc':
+                from .models import PlatformBinding
+                for binding_id in PlatformBinding.objects.filter(platform='qoj').exclude(encrypted_credentials='').values_list('id',flat=True):
+                    transaction.on_commit(lambda pk=binding_id: enqueue_qoj_overlay(pk))
+            if not done:
+                transaction.on_commit(lambda: refresh_tracker_catalog.apply_async(args=[kind,token],countdown=1))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('Tracker catalog refresh failed: %s',kind)
+        TrackerCatalog.objects.filter(pk=catalog.pk,token=token,refresh_state=expected).update(status='failed',error='目录更新失败，请重试')
+    finally:
+        remote.session.close()
+
+
+def enqueue_qoj_overlay(binding_id):
+    import uuid
+    from .models import PlatformBinding, QojCatalogOverlay, TrackerCatalog
+    binding = PlatformBinding.objects.filter(pk=binding_id,platform='qoj').first()
+    catalog = TrackerCatalog.objects.filter(kind='icpc').first()
+    if not binding or not binding.encrypted_credentials or not catalog:
+        return
+    with transaction.atomic():
+        overlay,_ = QojCatalogOverlay.objects.get_or_create(binding=binding)
+        overlay = QojCatalogOverlay.objects.select_for_update().get(pk=overlay.pk)
+        overlay.queue = [c['id'] for c in catalog.contests if c['id'] not in overlay.contests]
+        overlay.token = uuid.uuid4()
+        overlay.status = 'pending' if overlay.queue else 'ready'
+        overlay.error = ''
+        overlay.updated_at = timezone.now()
+        overlay.save()
+        token = str(overlay.token)
+        if overlay.queue:
+            transaction.on_commit(lambda: refresh_qoj_overlay.delay(binding_id,token,str(binding.sync_token)))
+
+
+@shared_task(soft_time_limit=155,time_limit=165,priority=0)
+def refresh_qoj_overlay(binding_id,token,binding_token):
+    from .models import PlatformBinding, QojCatalogOverlay
+    from .platform_credentials import attach
+    from .platform_sync import Remote, SyncError
+    from .tracker_sources import qoj_problems
+    from bs4 import BeautifulSoup
+    binding = PlatformBinding.objects.filter(pk=binding_id,sync_token=binding_token).first()
+    overlay = QojCatalogOverlay.objects.filter(binding_id=binding_id,token=token,status='pending').first()
+    if not binding or not overlay or not overlay.queue:
+        return
+    expected = list(overlay.queue)
+    cid = expected[0]
+    remote = Remote()
+    try:
+        attach(remote,binding)
+        soup = BeautifulSoup(remote.text('https://qoj.ac/contest/'+cid),'html.parser')
+        if soup.select_one('input[name=password]'):
+            raise SyncError('请更新 QOJ Cookie')
+        problems = qoj_problems(soup)
+        if not problems:
+            raise SyncError('题目同步失败，请重试')
+        with transaction.atomic():
+            current = QojCatalogOverlay.objects.select_for_update().filter(binding_id=binding_id,token=token,status='pending').first()
+            if not current or current.queue != expected or not PlatformBinding.objects.filter(pk=binding_id,sync_token=binding_token).exists():
+                return
+            current.contests = dict(current.contests,**{cid:problems})
+            current.queue = expected[1:]
+            current.updated_at = timezone.now()
+            current.status = 'pending' if current.queue else 'ready'
+            current.save()
+            if current.queue:
+                transaction.on_commit(lambda: refresh_qoj_overlay.apply_async(args=[binding_id,token,binding_token],countdown=1))
+    except Exception as exc:
+        QojCatalogOverlay.objects.filter(binding_id=binding_id,token=token,queue=expected).update(status='failed',error=str(exc)[:240] if isinstance(exc,SyncError) else '题目同步失败，请重试')
+    finally:
+        remote.session.close()

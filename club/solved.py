@@ -39,7 +39,7 @@ def remember_contest_ac(problem):
         problem_key=key, solved_on=day, defaults={'time_verified':problem.accepted_at is not None})
 
 
-def solved_evidence(user_ids):
+def _baseline_evidence(user_ids):
     """One ledger for total, semester and heatmap; unknown dates remain numeric only."""
     from datetime import date
     from .models import PlatformSolvedBaseline, ContestProblemProgress
@@ -114,6 +114,85 @@ def solved_evidence(user_ids):
         add(c.user_id,identity,day,title=row.title or row.label,url=row.url,source=c.platform+' · 比赛 AC')
     return {uid:{'items':list(items[uid].values()),'undated':unknown[uid]+sum(v['date'] is None for v in items[uid].values()),
                  'total':unknown[uid]+len(items[uid])} for uid in user_ids}
+
+
+def solved_evidence(user_ids):
+    """Use stable problem identities to combine all bound accounts."""
+    from datetime import date
+    from .models import PlatformSolvedRecord, PlatformSolvedBaseline, ContestProblemProgress, TrackerCatalog
+    from .platform_solved import contest_key, problem_url
+    user_ids=list(user_ids)
+    bindings=list(PlatformBinding.objects.filter(user_id__in=user_ids))
+    modern={b.user_id for b in bindings if b.sync_state.get('version') == 2}
+    result=_baseline_evidence([uid for uid in user_ids if uid not in modern]) if len(modern)<len(user_ids) else {}
+    items=defaultdict(dict)
+    accounts={(b.user_id,b.platform,b.account) for b in bindings}
+    today=timezone.localdate()
+    nc_aliases={}
+    catalog=TrackerCatalog.objects.filter(kind='nowcoder').first()
+    if catalog:
+        for event in catalog.contests:
+            for p in event['problems']:
+                aliases=[p['key']]+p.get('aliases',[])
+                canonical=next((key for key in aliases if key.startswith('problem/')),p['key'])
+                for key in aliases:nc_aliases[key.lower()]=canonical.lower()
+    def identity(platform,key,account=''):
+        prefix=('leetcode_cn' if account.startswith('cn:') else 'leetcode_us') if platform=='leetcode' else platform
+        if platform=='nowcoder':key=nc_aliases.get(key.lower(),key)
+        return prefix+':'+key.lower()
+    def add(uid,key,day=None,title='',url='',source=''):
+        if not key or uid not in modern or day and day>today:return
+        old=items[uid].get(key)
+        if old is None or day and (old['date'] is None or day<old['date']):
+            items[uid][key]={'date':day,'title':title or key,'url':url,'source':source}
+    for row in PlatformSolvedRecord.objects.filter(binding__user_id__in=modern).select_related('binding'):
+        b=row.binding
+        add(b.user_id,identity(b.platform,row.problem_key,b.account),row.solved_on,row.title,row.url,b.platform)
+    for base in PlatformSolvedBaseline.objects.filter(binding__user_id__in=modern).select_related('binding'):
+        b=base.binding
+        for key in set(base.problem_ids)|set(base.dated_problems):
+            try:day=date.fromisoformat(base.dated_problems[key]) if key in base.dated_problems else None
+            except (TypeError,ValueError):day=None
+            add(b.user_id,identity(b.platform,key,b.account),day,key,problem_url(b.platform,key,b.account),b.platform)
+    progress=list(ContestProblemProgress.objects.filter(participation__user_id__in=modern,accepted=True).select_related('participation'))
+    historical_aliases={}
+    for row in progress:
+        c=row.participation
+        raw=f'{c.platform}:{c.contest_key}:{row.problem_key}'.lower()
+        historical_aliases[(c.user_id,raw)]=identity(c.platform,contest_key(row),c.account)
+    def ledger_key(uid,key):
+        if (uid,key.lower()) in historical_aliases:return historical_aliases[(uid,key.lower())]
+        parts=key.split(':')
+        if parts[0]=='atcoder' and len(parts)>=3:
+            problem=parts[-1].lower()
+            return 'atcoder:'+(problem if problem.startswith(parts[1].lower()+'_') else parts[1].lower()+'_'+problem)
+        if parts[0]=='nowcoder' and len(parts)==3:
+            return identity('nowcoder',f'contest/{parts[1]}/{parts[2]}')
+        if parts[0]=='leetcode' and len(parts)>=3:
+            slug=parts[-1].lower()
+            if any(prefix+':'+slug in items[uid] for prefix in ('leetcode_cn','leetcode_us')):return None
+            regions={b.account.startswith('cn:') for b in bindings if b.user_id==uid and b.platform=='leetcode'}
+            if len(regions)==1:return identity('leetcode',slug,'cn:' if next(iter(regions)) else '')
+        return key.lower()
+    for credit in SolvedProblemCredit.objects.filter(user_id__in=modern):
+        add(credit.user_id,ledger_key(credit.user_id,credit.problem_key),source='过题记录')
+    for credit in DatedSolvedProblemCredit.objects.filter(user_id__in=modern,time_verified=True):
+        add(credit.user_id,ledger_key(credit.user_id,credit.problem_key),credit.solved_on,source='过题记录')
+    for row in Submission.objects.filter(member__user_id__in=modern,is_valid=True,problem__isnull=False,
+            parts__kind=SubmissionPart.PROOF,parts__status=SubmissionPart.APPROVED).select_related('member','problem'):
+        key=row.problem.identity.lower()
+        if key.startswith('leetcode:'):
+            key=('leetcode_cn:' if 'leetcode.cn/' in row.problem.url else 'leetcode_us:')+key.split(':',1)[1]
+        if key.startswith('nowcoder:'):key=identity('nowcoder',key.split(':',1)[1])
+        add(row.member.user_id,key,row.record_date,row.problem.title,row.problem.url,'训练记录')
+    for row in progress:
+        c=row.participation
+        if c.source_data.get('demo') or (c.user_id,c.platform,c.account) not in accounts:continue
+        day=timezone.localdate(row.accepted_at) if row.accepted_at else None
+        add(c.user_id,identity(c.platform,contest_key(row),c.account),day,row.title,row.url,c.platform)
+    result.update({uid:{'items':list(items[uid].values()),'total':len(items[uid]),
+                       'undated':sum(v['date'] is None for v in items[uid].values())} for uid in modern})
+    return result
 
 
 def lifetime_solved_counts(user_ids):

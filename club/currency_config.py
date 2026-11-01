@@ -17,6 +17,7 @@ def currency_icon_url(team):
 
 
 def config_data(team):
+    from .reward_rules import settings_data, reward_groups
     return {
         'currency_enabled': team.currency_enabled,
         'currency_icon': currency_icon_url(team),
@@ -24,10 +25,15 @@ def config_data(team):
         'streak_rewards': list(team.streak_rewards.values('days', 'reward')),
         'contest_rewards': list(team.contest_reward_configs.values('problems_solved', 'reward', 'is_ak')),
         'problem_rewards': team.problem_rewards or default_problem_rewards(),
+        'reward_settings': settings_data(team),
+        'reward_groups': reward_groups(),
     }
 
 
 def validate_config(data):
+    if 'reward_settings' in data:
+        from .reward_rules import validate_settings
+        validate_settings(data['reward_settings'])
     def integer(value, label, minimum=0, maximum=100000):
         if type(value) is not int or not minimum <= value <= maximum:
             raise ValueError(f'{label}必须为 {minimum}–{maximum} 的整数')
@@ -111,7 +117,7 @@ def apply_config(team, data):
         from .currency_services import initialize_default_currency_config
         if not team.shop_items.exists() and not team.streak_rewards.exists() and not team.contest_reward_configs.exists():
             initialize_default_currency_config(team)
-    for field in ('currency_enabled', 'daily_checkin_reward', 'problem_rewards'):
+    for field in ('currency_enabled', 'daily_checkin_reward', 'problem_rewards', 'reward_settings'):
         if field in data:
             setattr(team, field, data[field])
     if 'currency_icon_svg' in data:

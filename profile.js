@@ -4,6 +4,7 @@
   const number = value => typeof value === 'number' ? value.toLocaleString('zh-CN') : '—';
   let page, backdrop, data, opened = false, closing = false, poll, objectURL, allowed = false, generation = 0;
   let solvedBaselineSignature = null;
+  const adding = new Set();
   const entry = document.getElementById('openProfile');
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
   let scrollState;
@@ -70,7 +71,7 @@
             </form>
           </section>
           <section class="personal-basics personal-password" aria-labelledby="passwordTitle"><div><h2 id="passwordTitle">修改密码</h2><p class="muted">验证当前密码后设置新密码。</p></div><form id="personalPasswordForm" class="personal-name-field"><label>当前密码<input type="password" name="old_password" autocomplete="current-password" required></label><label>新密码<input type="password" name="new_password" autocomplete="new-password" minlength="8" maxlength="128" required></label><label>确认新密码<input type="password" name="confirm_password" autocomplete="new-password" minlength="8" maxlength="128" required></label><button type="submit" class="primary-button">修改密码</button><p id="passwordMessage" role="status"></p></form></section>
-          <section class="personal-platform-section" aria-labelledby="platformTitle"><div class="personal-platform-heading"><div><span class="personal-step">02 / CONNECT YOUR PLATFORMS</span><h2 id="platformTitle">算法平台</h2><p>绑定公开账号，查看 Rating、比赛表现与做题信息。</p></div><span id="bindingCount" class="binding-count"></span></div>
+          <section class="personal-platform-section" aria-labelledby="platformTitle"><div class="personal-platform-heading"><div><span class="personal-step">02 / CONNECT YOUR PLATFORMS</span><h2 id="platformTitle">算法平台</h2></div><div class="platform-heading-actions"><span id="bindingCount" class="binding-count"></span><button id="claimPlatformRewards" class="primary-button" type="button" hidden>领取过题奖励</button><button id="syncAllPlatforms" class="secondary-button" type="button">同步全部账号</button></div></div>
             <div id="platformGrid" class="platform-grid"></div>
           </section>
         </div>
@@ -78,6 +79,26 @@
     backdrop = document.createElement('div'); backdrop.className = 'personal-backdrop'; backdrop.hidden = true;
     backdrop.setAttribute('aria-hidden', 'true'); backdrop.onclick = back;
     document.body.append(backdrop, page);
+    page.querySelector('#claimPlatformRewards').onclick=async event=>{
+      event.target.disabled=true;
+      try {
+        const result=await request('/api/profile/platform-rewards/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:data.rewards.keys})});
+        data=await request('/api/profile');renderBindings();
+        await window.CurrencyModule?.init();message(`已领取 ${result.total} Coins`);
+        window.dispatchEvent(new Event('platform-rewards-updated'));
+      } catch(error){message(error.message,true);}
+      finally{event.target.disabled=false;}
+    };
+    page.querySelector('#syncAllPlatforms').onclick = async event => {
+      const ids = data.bindings.filter(b => b.status !== 'pending').map(b => b.id);
+      if (!ids.length) return;
+      event.target.disabled = true;
+      try {
+        await request('/api/profile/platform-accounts/sync', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+        data = await request('/api/profile'); renderBindings(); schedulePoll();
+      } catch (error) { message(error.message, true); }
+      finally { event.target.disabled = false; }
+    };
     page.querySelector('#platformGrid').addEventListener('focusout', () => {
       setTimeout(() => { if (opened && data) renderBindings(); }, 0);
     });
@@ -122,56 +143,93 @@
   }
   function metrics(binding) {
     const stats = binding.snapshot || {};
-    if (!Object.keys(stats).length) return '<div class="platform-empty">绑定后将在这里展示公开训练数据</div>';
+    if (!Object.keys(stats).length) return '';
     const history = stats.rating_history || [];
     const difficulty = stats.difficulty || [];
     return `<div class="platform-metrics"><div><span>当前 Rating</span><strong>${number(stats.rating)}</strong></div><div><span>最高 Rating</span><strong>${number(stats.max_rating)}</strong></div><div><span>${escape(stats.solved_label || '通过题数')}</span><strong>${number(stats.solved)}</strong></div></div>
       <div class="platform-extra">${stats.rank ? `<span>${escape(stats.rank)}</span>` : ''}${typeof stats.contests === 'number' ? `<span>${number(stats.contests)} 场 Rated 比赛</span>` : ''}${difficulty.map(d => `<span>${escape(d.label)} ${number(d.count)}</span>`).join('')}</div>
       ${history.length ? `<details class="rating-details"><summary>最近比赛 Rating <span>${history.length} 场</span></summary><ol>${history.slice().reverse().map(r => `<li><span>${escape(r.name)}</span><strong>${number(r.rating)}</strong></li>`).join('')}</ol></details>` : ''}
-      ${(stats.notes || []).map(note => `<p class="platform-note">${escape(note)}</p>`).join('')}`;
+      `;
   }
   function renderCard(card, platform, binding) {
     const meta = data.platforms[platform];
     const busy = binding?.status === 'pending';
-    const status = !binding ? '未绑定' : busy ? '同步中' : binding.status === 'failed' ? '待重试' : '已绑定';
-    card.innerHTML = `<div class="platform-card-head"><span class="platform-monogram" data-platform="${platform}">${escape(meta.short)}</span><div><h3>${escape(meta.name)}</h3><small>${escape(binding?.account || meta.hint)}</small></div><span class="platform-status ${busy ? 'pending' : binding?.status || ''}">${status}</span></div>
+    const status = !binding ? '新账号' : busy ? '同步中' : binding.status === 'failed' ? '待重试' : '已绑定';
+    const key = `${platform}-${binding?.id || 'new'}`;
+    const credentialFields = platform === 'codeforces' ? `<label for="key-${key}">API Key<input id="key-${key}" type="password" name="api_key" autocomplete="off"></label><label for="secret-${key}">API Secret<input id="secret-${key}" type="password" name="api_secret" autocomplete="off"></label>` : ['nowcoder','leetcode','qoj'].includes(platform) ? `<label for="cookie-${key}">Cookie<input id="cookie-${key}" type="password" name="cookie" maxlength="16000" autocomplete="off"></label>` : '';
+    card.innerHTML = `<div class="platform-card-head"><span class="platform-monogram" data-platform="${platform}">${escape(meta.short)}</span><div class="platform-card-identity"><h3>${escape(meta.name)}</h3><small>${escape(binding?.account || '添加账号')}</small></div><span class="platform-status ${busy ? 'pending' : binding?.status || ''}">${status}</span></div>
       ${binding ? metrics(binding) : ''}
-      ${binding?.error ? `<p class="platform-error" role="status">${escape(binding.error)}${binding.synced_at ? '；以下为上次成功数据。' : ''}</p>` : ''}
-      ${binding?.synced_at ? `<p class="platform-updated">上次成功同步 · ${escape(new Date(binding.synced_at).toLocaleString('zh-CN'))}</p>` : ''}
-      <form class="platform-bind-form"><label for="account-${platform}">${escape(meta.hint)}</label><div><input id="account-${platform}" name="account" required maxlength="100" value="${escape(binding?.account || '')}" autocomplete="off"><button class="secondary-button" type="submit" ${busy ? 'disabled' : ''}>${binding ? '更新绑定' : '绑定账号'}</button></div></form>
-      ${binding ? `<div class="platform-actions"><button type="button" data-refresh ${busy ? 'disabled' : ''}>${busy ? '正在获取资料…' : '↻ 同步资料'}</button>${binding.snapshot?.profile_url ? `<a href="${escape(binding.snapshot.profile_url)}" target="_blank" rel="noopener noreferrer">平台主页 ↗</a>` : ''}<button type="button" data-unbind>解绑</button></div>` : ''}
+      ${binding?.error ? `<p class="platform-error" role="status">${escape(binding.error)}</p>` : ''}
+      ${busy ? `<p class="platform-updated">已读取 ${number(binding.sync_progress?.count || 0)} 题</p>` : binding?.synced_at ? `<p class="platform-updated">${escape(new Date(binding.synced_at).toLocaleString('zh-CN'))}</p>` : ''}
+      <form class="platform-bind-form"><label for="account-${key}">${escape(meta.hint)}</label><div><input id="account-${key}" name="account" required maxlength="100" value="${escape(binding?.account || '')}" autocomplete="off"><button class="secondary-button" type="submit" ${busy ? 'disabled' : ''}>${binding ? '更新绑定' : '添加'}</button></div>
+      ${credentialFields ? `<details class="platform-credentials"><summary>凭据${binding?.has_credentials ? ' · 已保存' : ''}</summary><div class="credential-fields">${credentialFields}${binding?.has_credentials ? '<label class="credential-clear"><input type="checkbox" name="clear_credentials" value="1">清除已保存凭据</label>' : ''}</div></details>` : ''}</form>
+      ${binding ? `<div class="platform-actions"><button type="button" class="secondary-button" data-refresh ${busy ? 'disabled' : ''}>↻ 同步资料</button><button type="button" data-full ${busy ? 'disabled' : ''}>完整同步</button>${binding.snapshot?.profile_url ? `<a href="${escape(binding.snapshot.profile_url)}" target="_blank" rel="noopener noreferrer">主页 ↗</a>` : ''}<button type="button" class="secondary-button" data-unbind>解绑</button></div>` : data.bindings.some(b=>b.platform===platform) ? `<div class="platform-actions"><button type="button" data-cancel>取消</button></div>` : ''}
       <p class="platform-action-message" role="status"></p>`;
     card.querySelector('form').onsubmit = event => {
-      event.preventDefault(); act(card, platform, 'PUT', {account:new FormData(event.target).get('account')});
+      event.preventDefault();
+      const payload = Object.fromEntries(new FormData(event.target));
+      payload.clear_credentials = payload.clear_credentials === '1';
+      act(card, platform, binding ? 'PATCH' : 'CREATE', payload, binding);
     };
-    card.querySelector('[data-refresh]')?.addEventListener('click', () => act(card, platform, 'POST'));
+    card.querySelector('[data-refresh]')?.addEventListener('click', () => act(card, platform, 'SYNC', {}, binding));
+    card.querySelector('[data-full]')?.addEventListener('click', () => act(card, platform, 'SYNC', {full:true}, binding));
     card.querySelector('[data-unbind]')?.addEventListener('click', () => {
-      if (confirm(`解除 ${meta.name} 的账号关联？平台上的账号和记录不会被删除。`)) act(card, platform, 'DELETE');
+      if (confirm(`解绑 ${binding.account}？`)) act(card, platform, 'DELETE', {}, binding);
     });
+    card.querySelector('[data-cancel]')?.addEventListener('click', () => { adding.delete(platform); card.remove(); renderBindings(); });
     card.dataset.signature = JSON.stringify(binding || null);
   }
   function renderBindings() {
-    const signature=JSON.stringify(data.bindings.map(binding=>[binding.platform,binding.solved_baseline?.captured_at]));
+    const signature=JSON.stringify(data.bindings.map(binding=>[binding.id,binding.platform,binding.synced_at,binding.sync_progress?.count,binding.solved_baseline?.captured_at]));
     if(solvedBaselineSignature!==null && solvedBaselineSignature!==signature)
       window.dispatchEvent(new Event('platform-solved-updated'));
     solvedBaselineSignature=signature;
     const grid = page.querySelector('#platformGrid');
     for (const platform of Object.keys(data.platforms)) {
-      let card = grid.querySelector(`[data-platform-card="${platform}"]`);
-      if (!card) { card = document.createElement('article'); card.className = 'platform-card'; card.dataset.platformCard = platform; grid.append(card); }
-      const binding = data.bindings.find(b => b.platform === platform);
-      // Polling must not overwrite an account currently being edited.
-      if (!card.contains(document.activeElement) && card.dataset.signature !== JSON.stringify(binding || null)) renderCard(card, platform, binding);
+      let group = grid.querySelector(`[data-platform-group="${platform}"]`);
+      const meta = data.platforms[platform];
+      if (!group) {
+        group = document.createElement('section'); group.className = 'platform-group platform-card'; group.dataset.platformGroup = platform;
+        group.setAttribute('aria-label',meta.name);
+        group.innerHTML = `<div class="platform-account-list"></div><button type="button" class="secondary-button platform-add-account" data-add-account>＋ 添加账号</button>`;
+        group.querySelector('[data-add-account]').onclick = () => {
+          adding.add(platform); renderBindings(); group.querySelector('[data-new-account] input')?.focus();
+        };
+        grid.append(group);
+      }
+      const list = group.querySelector('.platform-account-list');
+      const bindings = data.bindings.filter(b => b.platform === platform);
+      for (const card of list.querySelectorAll('[data-binding-id]')) {
+        if (!bindings.some(b => String(b.id) === card.dataset.bindingId)) card.remove();
+      }
+      for (const binding of bindings) {
+        let card = list.querySelector(`[data-binding-id="${binding.id}"]`);
+        if (!card) { card = document.createElement('article'); card.className = 'platform-account'; card.dataset.bindingId = binding.id; list.append(card); }
+        if (!card.querySelector('form')?.contains(document.activeElement) && card.dataset.signature !== JSON.stringify(binding)) renderCard(card, platform, binding);
+      }
+      if ((adding.has(platform) || !bindings.length) && !list.querySelector('[data-new-account]')) {
+        const card = document.createElement('article'); card.className = 'platform-account platform-new-card'; card.dataset.newAccount = 'true'; list.append(card); renderCard(card, platform, null);
+      }
+      group.querySelector('[data-add-account]').hidden=!bindings.length || adding.has(platform);
     }
-    page.querySelector('#bindingCount').textContent = `${data.bindings.length} / ${Object.keys(data.platforms).length} 已关联`;
+    page.querySelector('#bindingCount').textContent = `${data.bindings.length} 个账号`;
+    const all = page.querySelector('#syncAllPlatforms');
+    if (all) all.disabled = !data.bindings.some(b => b.status !== 'pending');
+    const rewards=page.querySelector('#claimPlatformRewards');
+    if(rewards){rewards.hidden=!data.rewards?.total;rewards.textContent=`领取 ${data.rewards?.total || 0} Coins`;}
   }
-  async function act(card, platform, method, payload) {
+  async function act(card, platform, method, payload = {}, binding) {
     card.querySelectorAll('button').forEach(button => button.disabled = true);
     const output = card.querySelector('.platform-action-message'); output.textContent = '正在保存…';
     try {
-      await request('/api/profile/platforms/' + platform, {method, headers:{'Content-Type':'application/json'}, ...(payload ? {body:JSON.stringify(payload)} : {})});
+      const url = method === 'CREATE' ? `/api/profile/platforms/${platform}/accounts` : method === 'SYNC' ? '/api/profile/platform-accounts/sync' : `/api/profile/platform-accounts/${binding.id}`;
+      const body = method === 'SYNC' ? {...payload,ids:[binding.id]} : payload;
+      await request(url, {method:['CREATE','SYNC'].includes(method) ? 'POST' : method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      if (method === 'CREATE') { adding.delete(platform); card.remove(); }
       data = await request('/api/profile');
-      renderCard(card, platform, data.bindings.find(b => b.platform === platform)); renderBindings(); schedulePoll();
+      if (method !== 'CREATE' && method !== 'DELETE') renderCard(card, platform, data.bindings.find(b => b.id === binding.id));
+      renderBindings(); schedulePoll();
+      window.dispatchEvent(new Event('platform-accounts-updated'));
     } catch (error) {
       output.textContent = error.message; card.querySelectorAll('button').forEach(button => button.disabled = false);
     }
@@ -184,7 +242,7 @@
       try {
         const result = await request('/api/profile');
         if (!opened || version !== generation) return;
-        data.bindings = result.bindings; renderBindings(); schedulePoll();
+        data.bindings = result.bindings; data.rewards=result.rewards; renderBindings(); schedulePoll();
       } catch (error) { if (opened) message('同步状态读取失败，请重新打开个人页查看', true); }
     }, 3000);
   }

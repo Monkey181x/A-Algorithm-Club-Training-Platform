@@ -50,10 +50,12 @@ def canonical_problem(value):
         raise ValidationError('请填写公开的HTTP或HTTPS题目链接')
     path = p.path.rstrip('/') or '/'
     rules = [
+        (host == 'qoj.ac', r'/(?:contest/\d+/)?problem/(\d+)', 'qoj'),
+        (host in ('ac.nowcoder.com', 'www.nowcoder.com'), r'/acm/(contest/\d+/[A-Za-z0-9]+|problem/\d+)', 'nowcoder'),
         (host in ('nowcoder.com', 'www.nowcoder.com'), r'/practice/([a-fA-F0-9]{32})', 'nowcoder'),
         (host in ('luogu.com.cn', 'www.luogu.com.cn'), r'/problem/([A-Za-z0-9_]+)', 'luogu'),
         (host in ('leetcode.cn', 'leetcode.com', 'www.leetcode.cn', 'www.leetcode.com'), r'/problems/([^/]+)(?:/(?:description|editorial|solutions|submissions)(?:/.*)?)?', 'leetcode'),
-        (host in ('codeforces.com', 'www.codeforces.com'), r'/(?:problemset/problem|contest)/(\d+)/(?:problem/)?([A-Za-z0-9]+)', 'codeforces'),
+        (host in ('codeforces.com', 'www.codeforces.com'), r'/(?:problemset/problem|contest|gym)/(\d+)/(?:problem/)?([A-Za-z0-9]+)', 'codeforces'),
         (host in ('atcoder.jp', 'www.atcoder.jp'), r'/contests/[^/]+/tasks/([^/]+)', 'atcoder'),
     ]
     for match_host, pattern, platform in rules:

@@ -16,10 +16,11 @@ PLATFORMS = {
     'atcoder': {'name': 'AtCoder', 'short': 'AT', 'hint': '用户名'},
     'nowcoder': {'name': '牛客', 'short': 'NC', 'hint': '个人主页中的数字 UID'},
     'luogu': {'name': '洛谷', 'short': 'LG', 'hint': '数字 UID 或用户名'},
+    'qoj': {'name': 'QOJ', 'short': 'QOJ', 'hint': '用户名'},
     'leetcode': {'name': 'LeetCode', 'short': 'LC', 'hint': '国际站 ID；中国站填写 cn:ID'},
 }
 HOSTS = {'codeforces.com', 'atcoder.jp', 'kenkoooo.com', 'ac.nowcoder.com',
-         'www.luogu.com.cn', 'leetcode.cn', 'leetcode.com', 'raw.githubusercontent.com', 'www.nowcoder.com'}
+         'www.luogu.com.cn', 'leetcode.cn', 'leetcode.com', 'raw.githubusercontent.com', 'www.nowcoder.com', 'qoj.ac', 'api.github.com', 'rl.algoux.cn', 'cdn.algoux.cn'}
 
 
 class SyncError(ValueError):
@@ -46,12 +47,15 @@ class Remote:
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (compatible; ClubTraining/1.0)',
                                      'Accept': 'application/json,text/html;q=0.9'})
         self.deadline = time.monotonic() + 140
+        self.credentials = {}
 
-    def text(self, url, *, payload=None, headers=None, redirects=0, limit=8 * 1024 * 1024):
+    def text(self, url, *, payload=None, headers=None, redirects=0, limit=8 * 1024 * 1024, _attempt=0):
         if urlparse(url).scheme != 'https' or urlparse(url).hostname not in HOSTS:
             raise SyncError('不支持的平台地址')
         if time.monotonic() > self.deadline:
             raise SyncError('平台同步超时，请稍后重试')
+        from .platform_credentials import prepare_request
+        url, headers = prepare_request(self, url, headers)
         try:
             with self.session.request('POST' if payload is not None else 'GET', url,
                     json=payload, headers=headers, timeout=(5, 15), stream=True,
@@ -75,6 +79,9 @@ class Remote:
                 except UnicodeDecodeError:
                     return content.decode('gb18030', errors='replace')
         except requests.RequestException:
+            if _attempt < 2 and time.monotonic() + 3 < self.deadline:
+                time.sleep(1)
+                return self.text(url,payload=payload,headers=headers,redirects=redirects,limit=limit,_attempt=_attempt+1)
             raise SyncError('平台连接失败，请稍后重试') from None
 
     def json(self, url, **kwargs):

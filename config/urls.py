@@ -36,6 +36,8 @@ def frontend_asset(request, filename):
 
 
 urlpatterns = [
+    path('tracker.js', lambda request: frontend_asset(request, 'tracker.js')),
+    path('tracker.css', lambda request: frontend_asset(request, 'tracker.css')),
     path("theme-model.js", lambda request: frontend_asset(request, "theme-model.js")),
     path("theme-settings.js", lambda request: frontend_asset(request, "theme-settings.js")),
     path("theme-settings.css", lambda request: frontend_asset(request, "theme-settings.css")),

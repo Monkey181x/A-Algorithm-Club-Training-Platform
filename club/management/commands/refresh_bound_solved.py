@@ -27,6 +27,16 @@ class Command(BaseCommand):
             with transaction.atomic():
                 binding=PlatformBinding.objects.select_for_update().get(pk=binding.pk)
                 prior=PlatformSolvedBaseline.objects.filter(binding=binding).first()
+                if binding.sync_state.get('version') == 2:
+                    if binding.status == 'pending' and binding.requested_at > timezone.now()-timedelta(minutes=5):
+                        skipped += 1
+                        continue
+                    self.stdout.write(f'user={binding.user_id} platform={binding.platform}: '+('enqueue' if options['apply'] else 'would enqueue'))
+                    queued += 1
+                    if options['apply']:
+                        from club.platform_account_views import start
+                        start(binding, full=not binding.sync_state.get('complete'))
+                    continue
                 if (prior and (prior.total is not None or not options['retry_failed'])) or (
                         binding.status=='pending' and binding.requested_at>timezone.now()-timedelta(minutes=4)):
                     skipped+=1

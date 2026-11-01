@@ -24,3 +24,34 @@ html body :is(.synced-member-avatar,.profile-avatar,.personal-avatar)>img{positi
   html body .topbar .profile-entry strong{max-width:8ch;overflow:hidden;text-overflow:ellipsis;font-size:10px;line-height:1.25;white-space:nowrap;}
   html body .topbar .profile-entry small{font-size:9px;line-height:1.25;white-space:nowrap;}
 }
+
+/* One platform per card; accounts stay together inside that card. */
+.personal-page .platform-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;align-items:start}
+.platform-group{min-width:0;margin:0;padding:25px}
+.platform-account-list{display:flex;flex-direction:column;gap:24px}
+.platform-account{min-width:0}
+.platform-account+.platform-account{border-top:1px solid var(--site-border,#dfe8f2);padding-top:24px}
+.platform-card-identity{display:grid;gap:6px;min-width:0}
+.platform-card-identity small{display:block}
+.platform-group .platform-monogram{width:52px;height:52px;border-radius:16px}
+.platform-group .platform-card-head h3{font-size:18px}
+.platform-group .platform-card-head small{font-size:12px}
+.platform-group .platform-metrics{padding:20px;margin:20px 0 14px;border-radius:13px;background:var(--site-fill,#f3f6fa)}
+.platform-group .platform-extra:empty{display:none}
+.platform-group .platform-bind-form{margin-top:20px}
+.platform-group .platform-bind-form>div{align-items:stretch;gap:10px}
+.platform-group .platform-bind-form>div>input{flex:1;min-width:0}
+.platform-group .platform-actions{gap:12px;flex-wrap:wrap;margin-top:20px}
+.platform-group .platform-actions .secondary-button{padding:10px 13px;border:1px solid var(--site-border,#d7e2ee);border-radius:11px;background:var(--site-fill,#edf3fa);color:var(--site-text,#28425d)}
+.platform-add-account{margin-top:20px;font-size:11px;padding:9px 12px}
+.platform-heading-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.platform-credentials{margin-top:16px;font-size:12px}
+.platform-credentials summary{cursor:pointer;color:var(--site-secondary,#74869b)}
+.platform-bind-form .credential-fields{display:grid;gap:12px;margin-top:14px}
+.platform-bind-form .credential-fields label{display:grid;gap:7px}
+.platform-bind-form .credential-fields .credential-clear{display:flex;align-items:center;gap:8px}
+.credential-clear input{width:auto}
+.platform-monogram[data-platform=qoj]{color:#208c80;background:#e3f5ef}
+.platform-group .platform-error{overflow-wrap:anywhere}
+@container(max-width:680px){.personal-page .platform-grid{grid-template-columns:1fr}.platform-group{padding:20px}}
+@media(max-width:600px){.personal-page .platform-grid{grid-template-columns:1fr;gap:16px}.platform-group{padding:20px}.platform-heading-actions{gap:8px}.personal-platform-heading{flex-wrap:wrap}}
