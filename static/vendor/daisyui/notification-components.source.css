@@ -1,0 +1,8 @@
+@tailwind utilities source(none);
+@source inline("nt-toggle nt-btn nt-input nt-select nt-fieldset nt-fieldset-legend");
+@plugin "./node_modules/daisyui" {
+  prefix: "nt-";
+  themes: false;
+  include: toggle, button, input, select, fieldset;
+  logs: false;
+}

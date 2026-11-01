@@ -212,7 +212,10 @@ def reaction(request, submission_id, kind):
         else:
             target.likes.filter(user=request.user).delete()
         return JsonResponse({'ok': True, 'likes': target.likes.count(), 'liked': request.method == 'PUT'})
-    SubmissionReport.objects.get_or_create(submission=target, version=target.version, reporter=request.user)
+    report, created = SubmissionReport.objects.get_or_create(submission=target, version=target.version, reporter=request.user)
+    if created:
+        from .astrbot_notifications import notify_report
+        notify_report(report, member)
     return JsonResponse({'ok': True})
 
 

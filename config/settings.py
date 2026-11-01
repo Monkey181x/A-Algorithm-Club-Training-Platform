@@ -106,6 +106,10 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {'priority_steps':list(range(10)), 'queue_orde
 from celery.schedules import crontab
 
 CELERY_BEAT_SCHEDULE = {
+    "astrbot-notifications": {
+        "task": "club.tasks.send_astrbot_notifications",
+        "schedule": 60.0,
+    },
     "refresh-contest-calendar": {
         "task": "club.tasks.refresh_contest_calendar",
         "schedule": crontab(hour="6,18", minute=0),
@@ -117,3 +121,5 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+ASTRBOT_NOTIFY_URL = os.environ.get('ASTRBOT_NOTIFY_URL', '').strip()

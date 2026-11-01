@@ -1,0 +1,6 @@
+name: astrbot_plugin_club_notify
+display_name: 算法社训练通知
+desc: 接收训练平台 API，推送举报、商品使用、实物订单和每周未达标提醒。
+version: v1.2.0
+author: Monkey
+astrbot_version: ">=4.16,<5"

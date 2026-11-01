@@ -159,6 +159,8 @@ def use_consumable(request, inventory_id):
         return api_error('使用请求编号已被使用，请刷新后重试', 409)
     inventory.quantity -= 1
     inventory.save(update_fields=['quantity', 'updated_at'])
+    from .astrbot_notifications import notify_item_use
+    notify_item_use(unit)
     return private_json({'ok': True, 'status': unit.status, 'fulfillment_id': unit.pk})
 
 
@@ -210,6 +212,8 @@ def redeem(request, unit_id):
     unit.redeemed_at = timezone.now()
     unit.encrypted_code = key_cipher().encrypt(code.encode()).decode()
     unit.save(update_fields=['status', 'redeemed_at', 'encrypted_code'])
+    from .astrbot_notifications import notify_item_use
+    notify_item_use(unit)
     return private_json({'code': code})
 
 

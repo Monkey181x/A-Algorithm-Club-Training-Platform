@@ -1,0 +1,58 @@
+{
+  "api_token": {
+    "description": "api_token",
+    "hint": "至少 32 位的随机密钥，与训练平台 ASTRBOT_NOTIFY_TOKEN 一致。填写后保存并重载插件。",
+    "type": "string", "default": "", "secret": true
+  },
+  "interaction_notifications": {
+    "description": "用户互动",
+    "hint": "接收提交举报、商品使用和实物商品购买通知。可同时通知多个群和多个用户。",
+    "type": "object",
+    "items": {
+      "group_qqs": {
+        "description": "通知群 QQ 号（可多个）",
+        "hint": "每项填写一个群号，使用列表添加按钮增加号码。机器人需已加入目标群。",
+        "type": "list", "default": []
+      },
+      "user_qqs": {
+        "description": "通知用户 QQ 号（可多个）",
+        "hint": "每项填写一个用户 QQ 号。机器人需具有向该用户发送私聊消息的权限。",
+        "type": "list", "default": []
+      }
+    }
+  },
+  "qualification_notifications": {
+    "description": "达标审查",
+    "hint": "按平台团队配置的每周审核时间接收未达标提醒：积分小于 6 或有效提交小于 4。可同时通知多个群和多个用户。",
+    "type": "object",
+    "items": {
+      "group_qqs": {
+        "description": "通知群 QQ 号（可多个）",
+        "hint": "每项填写一个群号，使用列表添加按钮增加号码。",
+        "type": "list", "default": []
+      },
+      "user_qqs": {
+        "description": "通知用户 QQ 号（可多个）",
+        "hint": "每项填写一个用户 QQ 号，使用列表添加按钮增加号码。",
+        "type": "list", "default": []
+      }
+    }
+  },
+  "team_api_tokens": {
+    "description": "团队专属密钥（可选，可多个）",
+    "hint": "同一插件接收多个团队的独立密钥时，每项填写 团队ID=密钥。密钥来自平台团队通知配置；配置后该团队只接受自己的专属密钥。未配置专属密钥的团队使用顶部 api_token。",
+    "type": "list", "default": [], "secret": true
+  },
+  "platform_id": {
+    "description": "QQ 机器人连接 ID（通常留空）",
+    "hint": "仅一个 OneBot v11 / NapCat / Lagrange 连接时自动识别。多个连接时填写 AstrBot 消息平台中的连接 ID；这是连接 ID，不是机器人 QQ 号。",
+    "type": "string", "default": ""
+  },
+  "host": {
+    "description": "API 监听地址",
+    "hint": "默认 127.0.0.1。Docker 跨容器访问时可设为 0.0.0.0，并限制端口访问来源。",
+    "type": "string", "default": "127.0.0.1"
+  },
+  "port": {"description": "API 监听端口", "type": "int", "default": 8099},
+  "routes": {"description": "旧版路由（兼容配置）", "type": "text", "default": "{}", "invisible": true}
+}
