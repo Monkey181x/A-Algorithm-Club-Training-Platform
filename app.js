@@ -790,14 +790,14 @@ async function completeMakeup(date) {
     if (selectedPulseDate) selectPulseDay(selectedPulseDate);
   }
 }
-async function openModal(forceToday = false) {
+async function openModal(forceToday = false, correction = null) {
   const selected = forceToday === true ? pulseDays.find(day => day.date === pulseToday)
     : pulseDays.find(day => day.date === selectedPulseDate);
-  const date = selected?.date || pulseToday;
+  const date = correction?.record_date || selected?.date || pulseToday;
   const historical = date < pulseToday;
-  if (!adminTestMode && selected && (!selected.canSubmit || historical && (selected.submitted || selected.isMakeup))) return;
-  let weekId = selected?.weekId || currentSubmissionWeekId;
-  if (historical && !adminTestMode) {
+  if (!correction && !adminTestMode && selected && (!selected.canSubmit || historical && (selected.submitted || selected.isMakeup))) return;
+  let weekId = correction?.week_id || selected?.weekId || currentSubmissionWeekId;
+  if (historical && !adminTestMode && !correction) {
     const permission = await completeMakeup(date);
     if (!permission) return;
     weekId = permission.week_id;
@@ -805,10 +805,11 @@ async function openModal(forceToday = false) {
   loadDailyChallenges(); editingSubmission = null; resubmitting = null;
   $('#modalTitle').textContent = historical ? '补交当日记录' : selected?.submitted || selected?.hasSubmission ? '继续提交' : '提交今日记录'; resetSubmissionForm();
   $('#submissionForm').dataset.recordDate = date || '';
-  $('#submissionForm').dataset.makeup = historical ? '1' : '';
+  $('#submissionForm').dataset.makeup = historical && !correction ? '1' : '';
   if (date) $('.form-note span').textContent = `记录日期：${date}`;
   $('#submissionForm').dataset.weekId = weekId || '';
   if(adminTestMode) $('.form-note span:last-child').textContent='无需补签券';
+  else if (correction) $('.form-note span:last-child').textContent = '修改被驳回记录 · 保留首次提交时间 · 无需补签券';
   else if (historical) $('.form-note span:last-child').textContent = '已开放补交 · 学期结束前有效';
   showSubmissionEditor();
   return true;

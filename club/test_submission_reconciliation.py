@@ -163,9 +163,13 @@ class SubmissionReconciliationTests(TestCase):
         MakeupPermission.objects.create(member=self.author_member,semester=self.semester,record_date=day)
         item = self.submit_day(day)
         self.reject(item)
-        self.assertTrue(self.activity(day)['makeupOpen'])
+        self.assertFalse(self.activity(day)['makeupOpen'])
+        original_time = item.submitted_at
         self.submit_day(day, submission_id=item.pk)
-        self.assertTrue(self.activity(day)['isMakeup'])
+        item.refresh_from_db()
+        self.assertEqual(item.submitted_at, original_time)
+        self.assertFalse(self.activity(day)['isMakeup'])
+        self.assertEqual(self.balance(), 3)
         self.assertFalse(self.activity(day)['canSubmit'])
 
     def test_rejected_closed_week_submission_can_reuse_its_reopened_permission(self):
@@ -178,7 +182,7 @@ class SubmissionReconciliationTests(TestCase):
         mine = self.client.get('/api/submissions?mine=1').json()['submissions']
         self.assertTrue(next(row for row in mine if row['id']==item.pk)['can_resubmit'])
         self.submit_day(day, submission_id=item.pk)
-        self.assertTrue(self.activity(day)['isMakeup'])
+        self.assertFalse(self.activity(day)['isMakeup'])
 
     def test_prior_normal_day_becomes_open_makeup_when_removed_later(self):
         item = self.submit_day()
@@ -215,3 +219,55 @@ class SubmissionReconciliationTests(TestCase):
         self.assertEqual(self.balance(), 0)
         call_command('reconcile_signins',apply=True,stdout=StringIO())
         self.assertEqual(self.balance(), 0)
+
+    def test_rejected_correction_keeps_original_day_and_time_with_other_valid_submission(self):
+        first = self.submit_day()
+        first_time = first.submitted_at
+        original_problem = self.problem
+        self.problem = Problem.objects.create(identity='correction:other', url='https://example.com/other')
+        self.submit_day()
+        self.reject(first)
+        self.problem = original_problem
+        with patch('django.utils.timezone.now', return_value=timezone.now()+timedelta(days=1)):
+            self.submit_day(self.today, submission_id=first.pk)
+        first.refresh_from_db()
+        self.assertEqual(first.submitted_at, first_time)
+        self.assertEqual(first.record_date, self.today)
+        self.assertEqual(self.balance(), 3)
+        self.assertFalse(CheckinRecord.objects.get(member=self.author_member).is_makeup)
+        self.assertEqual(lifetime_solved_counts([self.author.pk])[self.author.pk], 2)
+
+    def test_rejected_only_record_requires_ticket_for_new_overview_but_not_correction(self):
+        StreakReward.objects.create(team=self.team, days=1, reward=5)
+        item = self.submit_day()
+        first_time = item.submitted_at
+        ticket = ShopItem.objects.create(team=self.team,name='Ticket',price=1,item_type='makeup_ticket')
+        inventory = UserInventory.objects.create(team=self.team,member=self.author_member,item=ticket,quantity=2)
+        with patch('django.utils.timezone.now', return_value=timezone.now()+timedelta(days=1)):
+            self.reject(item)
+            self.assertEqual(self.balance(), 0)
+            self.assertFalse(self.activity(self.today)['makeupOpen'])
+            self.assertFalse(MakeupPermission.objects.filter(member=self.author_member,record_date=self.today).exists())
+            with patch('club.problem_parser.get_problem', return_value=self.problem):
+                denied = self.client.post('/api/submissions', {'week_id':item.week_id,'record_date':self.today.isoformat(),
+                    'problem_url':self.problem.url,'proof':self.image(),'code':'int main() {}','code_language':'cpp'})
+            self.assertEqual(denied.status_code, 409)
+            self.assertIn('补签券', denied.json()['error'])
+            self.submit_day(self.today, submission_id=item.pk)
+            self.assertEqual(self.balance(), 8)
+            self.assertFalse(CheckinRecord.objects.get(member=self.author_member).is_makeup)
+            item.refresh_from_db()
+            self.assertEqual(item.submitted_at, first_time)
+            self.reject(item)
+            makeup_checkin(self.author_member,self.today)
+            inventory.refresh_from_db()
+            self.assertEqual(inventory.quantity, 1)
+            self.problem = Problem.objects.create(identity='correction:new',url='https://example.com/new')
+            self.submit_day(self.today)
+            self.assertTrue(CheckinRecord.objects.get(member=self.author_member).is_makeup)
+            self.assertEqual(self.balance(), 5)
+            self.problem = item.problem
+            self.submit_day(self.today, submission_id=item.pk)
+            self.assertEqual(self.balance(), 5)
+        inventory.refresh_from_db()
+        self.assertEqual(inventory.quantity, 1)

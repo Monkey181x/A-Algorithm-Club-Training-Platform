@@ -39,3 +39,32 @@ test('a leaderboard request started before deletion cannot overwrite the new sol
   pending[0]({ok:true,json:async()=>({rows:[{value:1}]})});await old;
   assert.equal(data['solved:codeforces'][0].value,0);
 });
+
+test('rejected corrections bypass overview day locks and never request a makeup ticket',async()=>{
+  const entries=new Map();
+  const $=key=>{if(!entries.has(key))entries.set(key,{dataset:{}});return entries.get(key);};
+  const context={$,pulseToday:'2026-11-01',selectedPulseDate:'2026-10-30',
+    pulseDays:[{date:'2026-10-30',submitted:true,isMakeup:false,canSubmit:false,weekId:2}],
+    adminTestMode:false,currentSubmissionWeekId:3,completeMakeup:async()=>{throw Error('must not spend ticket');},
+    loadDailyChallenges(){},resetSubmissionForm(){},showSubmissionEditor(){},editingSubmission:null,resubmitting:null};
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('async function openModal('),source.indexOf('\nlet submissionScrollState')),context);
+  assert.equal(await vm.runInContext("openModal(false,{record_date:'2026-10-30',week_id:2})",context),true);
+  assert.equal($('#submissionForm').dataset.recordDate,'2026-10-30');
+  assert.equal($('#submissionForm').dataset.makeup,'');
+  assert.equal(await vm.runInContext('openModal()',context),undefined);
+});
+
+test('the rejected-record action uses record eligibility rather than overview date permissions',async()=>{
+  const community=fs.readFileSync(require.resolve('../community.js'),'utf8');
+  const record={id:8,can_resubmit:true,record_date:'2026-10-30',week_id:2,problem_url:'x',parts:[]};
+  const entries=new Map(),calls=[];
+  const context={ownRecords:new Map([[8,record]]),$:key=>{if(!entries.has(key))entries.set(key,{dataset:{}});return entries.get(key);},
+    openModal:async(...args)=>{calls.push(args);return true;},showToast(){},uiProblemTitle:x=>x,
+    setSubmissionCodeDraft(){},renderSubmissionDraftBlog(){},resubmitting:null};
+  vm.createContext(context);
+  vm.runInContext(community.slice(community.indexOf('async function beginResubmit('),community.indexOf("\ndocument.addEventListener('DOMContentLoaded'",community.indexOf('async function beginResubmit('))),context);
+  assert.equal(await vm.runInContext('beginResubmit(8)',context),true);
+  assert.equal(calls[0][0],false);assert.equal(calls[0][1],record);
+  assert.equal(context.resubmitting,8);
+});

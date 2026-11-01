@@ -230,13 +230,8 @@ function startAdminQueuePolling() { loadWorkbench(); }
 async function beginResubmit(id) {
   const record = ownRecords.get(Number(id));
   if (!record) return;
-  if(record.record_date<pulseToday){
-    const data=await communityRequest(`/api/training-activity?start=${record.record_date}&end=${record.record_date}`);
-    const day=data.days?.[0];
-    if(!day?.canSubmit){showToast('该日期当前不能重新提交');return false;}
-    updatePulseDay(day);selectPulseDay(day.date);
-    if(!await openModal())return false;
-  }else if(!await openModal(true))return false;
+  if (!record.can_resubmit) { showToast('该记录当前不能重新提交'); return false; }
+  if (!await openModal(false, record)) return false;
   resubmitting = record.id;
   $('#submissionForm').dataset.weekId = record.week_id;
   $('#submissionForm').dataset.recordDate = record.record_date;

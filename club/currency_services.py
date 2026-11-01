@@ -107,9 +107,9 @@ def get_current_streak(member):
 
 
 @transaction.atomic
-def perform_checkin(member):
-    """Perform daily check-in"""
-    today = timezone.localdate()
+def perform_checkin(member, *, day=None):
+    """Sign today, or restore the original day of a rejected submission."""
+    today = day or timezone.localdate()
     if not member.pk:
         raise ValueError('仅团队成员可以签到')
     if not TeamMembership.objects.select_for_update().get(pk=member.pk).is_active:
@@ -380,7 +380,7 @@ def reverse_signin_reward(member, amount, description):
 
 
 @transaction.atomic
-def reconcile_submission_day(member, day, semester, recoveries=()):
+def reconcile_submission_day(member, day, semester, recoveries=(), *, reopen_makeup=True):
     """Remove day-level benefits only after its final valid submission is gone."""
     from .models import Submission, WeeklyStreakGrant
     TeamMembership.objects.select_for_update().get(pk=member.pk)
@@ -392,9 +392,12 @@ def reconcile_submission_day(member, day, semester, recoveries=()):
         reverse_signin_reward(member, checkin.reward_amount, f'{day.isoformat()} 提交全部失效，撤回签到奖励')
         checkin.delete()
     permission = MakeupPermission.objects.filter(member=member, semester=semester, record_date=day)
-    permission.update(completed_at=None)
+    if reopen_makeup:
+        permission.update(completed_at=None)
+    else:
+        permission.delete()
     today = timezone.localdate()
-    if semester.is_active and not semester.archived_at and semester.starts_on <= day < today <= semester.ends_on:
+    if reopen_makeup and semester.is_active and not semester.archived_at and semester.starts_on <= day < today <= semester.ends_on:
         # Corrections reuse the already earned/opened date; do not spend another ticket.
         MakeupPermission.objects.get_or_create(member=member, semester=semester, record_date=day)
     monday = day-timedelta(days=day.weekday())

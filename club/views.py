@@ -158,12 +158,7 @@ def serialize_submission(submission, include_content=True, parts=None):
     today = timezone.localdate(now)
     active = (not submission.semester.archived_at and submission.semester.is_active
         and submission.semester.starts_on <= today <= submission.semester.ends_on)
-    open_week = not submission.week.is_closed and submission.week.starts_at <= now < submission.week.ends_at
-    from .models import MakeupPermission
-    reopened = not submission.is_valid and submission.record_date < today and MakeupPermission.objects.filter(
-        member=submission.member, semester=submission.semester, record_date=submission.record_date,
-        completed_at__isnull=True).exists()
-    can_resubmit = not submission.is_valid and active and (open_week or reopened)
+    can_resubmit = not submission.is_valid and active
     return {"id": submission.id, "member_id": submission.member_id, "member_name": submission.member.display_name, "week": submission.week.number, "week_id": submission.week_id, "submitted_at": submission.submitted_at.isoformat(), "record_date": submission.record_date.isoformat(), "is_valid": submission.is_valid, "version": submission.version, "rejection_note": submission.rejection_note, "problem_url": submission.problem.url if submission.problem_id else "", "problem_title": (submission.problem.title or submission.problem.url) if submission.problem_id else "", "semester_name": submission.semester.name, "can_delete": not bool(submission.semester.archived_at), "can_edit": not submission.semester.archived_at and submission.semester.is_active and not submission.week.is_closed and submission.week.starts_at <= timezone.now() < submission.week.ends_at, "can_resubmit": can_resubmit, "parts": [serialize_part(part, include_content) for part in selected_parts]}
 
 
@@ -634,11 +629,12 @@ def submissions(request, submission_id=None, edit=False):
                 if not previous:
                     return api_error('仅能修改本人原周的提交记录', 409)
                 record_date = previous.record_date
-            historical = record_date < today and not sandbox and (previous is None or not previous.is_valid)
+            correction = previous is not None and not previous.is_valid
+            historical = record_date < today and not sandbox and previous is None
             if not sandbox and (semester.archived_at or not semester.is_active
                     or not semester.starts_on <= today <= semester.ends_on):
                 return api_error('当前学期已结束或尚未开放，不能继续提交', 409)
-            if not sandbox and not historical and (week.is_closed or not week.starts_at <= now < week.ends_at):
+            if not sandbox and not historical and not correction and (week.is_closed or not week.starts_at <= now < week.ends_at):
                 return api_error('该周次已截止或尚未开放，不能继续提交，请刷新页面', 409)
             if (week.starts_at, week.ends_at) != week_bounds(semester, week.number):
                 return api_error('周次日期异常，请联系管理员修复后再提交', 409)
@@ -694,8 +690,9 @@ def submissions(request, submission_id=None, edit=False):
                 ReviewLog.objects.create(submission=submission, actor=request.user, action='edit' if edit else 'resubmit', detail={'version': submission.version})
             else:
                 submission = Submission.objects.create(team=membership.team, member=membership, semester=semester, week=week, is_valid=True, problem=problem, record_date=record_date)
-            Submission.objects.filter(pk=submission.pk).update(submitted_at=now)
-            submission.submitted_at = now
+            if not correction:
+                Submission.objects.filter(pk=submission.pk).update(submitted_at=now)
+                submission.submitted_at = now
             if proof:
                 part = SubmissionPart.objects.create(submission=submission, kind=SubmissionPart.PROOF, upload=proof)
                 stored_file = part.upload
@@ -720,20 +717,16 @@ def submissions(request, submission_id=None, edit=False):
                     checkin_date=record_date, is_makeup=True)
                 permission.completed_at = now
                 permission.save(update_fields=['completed_at'])
-            elif not sandbox and submission.record_date < today:
-                reopened = MakeupPermission.objects.select_for_update().filter(member=membership,
-                    semester=semester, record_date=submission.record_date, completed_at__isnull=True).first()
-                if reopened:
-                    CheckinRecord.objects.get_or_create(team=membership.team, member=membership,
-                        checkin_date=submission.record_date, defaults={'is_makeup': True})
-                    reopened.completed_at = now
-                    reopened.save(update_fields=['completed_at'])
+            elif correction and not sandbox:
+                # Correct the original record without granting a new overview submission.
+                MakeupPermission.objects.filter(member=membership, semester=semester,
+                    record_date=record_date).delete()
             refresh_totals(semester)
             if membership.team.currency_enabled:
                 from .currency_services import settle_weekly_streak,perform_checkin
                 TeamMembership.objects.select_for_update().get(pk=membership.pk)
-                if submission.record_date == today and not CheckinRecord.objects.filter(member=membership,checkin_date=today).exists():
-                    perform_checkin(membership)
+                if (submission.record_date == today or correction) and not CheckinRecord.objects.filter(member=membership,checkin_date=submission.record_date).exists():
+                    perform_checkin(membership, day=submission.record_date)
                 else:
                     settle_weekly_streak(membership, submission.record_date)
     except Exception as exc:

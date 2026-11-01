@@ -290,7 +290,7 @@ def resolve_report(request, submission_id, direct=False):
         target.save(update_fields=['is_valid', 'rejection_note'])
         target.parts.update(status='rejected', points_awarded=0, review_note=note, reviewed_at=timezone.now(), reviewed_by=request.user)
         from .currency_services import reconcile_submission_day
-        reconcile_submission_day(target.member, target.record_date, semester, recoveries=plan['recoveries'])
+        reconcile_submission_day(target.member, target.record_date, semester, recoveries=plan['recoveries'], reopen_makeup=False)
         refresh_totals(semester)
     ReviewLog.objects.create(submission=target, actor=request.user, action=('direct_' if direct else 'report_') + action, detail={'version': target.version, 'note': note})
     return JsonResponse({'ok': True})
