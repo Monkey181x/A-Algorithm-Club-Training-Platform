@@ -346,7 +346,9 @@ def select_team(request):
 
 @api_login_required
 def me(request):
-    from .profile_views import avatar_url
+    from .avatar_images import url_for
+    from .models import UserProfile
+    personal = UserProfile.objects.filter(user=request.user).first()
     membership = membership_for(request)
     teams = teams_for(request.user)
     test_target=getattr(request,'test_target_team',None)
@@ -355,7 +357,7 @@ def me(request):
         teams=[{'team_id':t.pk,'team__name':t.name,'team__code':t.code} for t in target_teams().order_by('pk')]
     role = 'site_admin' if request.user.is_superuser else membership.role if membership else 'member'
     return JsonResponse({'test_target_team':{'id':test_target.pk,'name':test_target.name} if test_target else None, 'test_mode':bool(getattr(request,'admin_test_mode',False)), 'name': membership.display_name if membership else request.user.username,
-        'account': request.user.username, 'avatar': avatar_url(request.user), 'site_admin': request.user.is_superuser, 'role': role,
+        'account': request.user.username, 'avatar': url_for(personal), 'avatar_small': url_for(personal, membership.pk if membership and membership.pk else None, 'small'), 'site_admin': request.user.is_superuser, 'role': role,
         'is_team_manager': request.user.team_memberships.filter(role='admin', is_active=True).exists(),
         'can_manage_current': request.user.is_superuser or bool(membership and membership.is_admin),
         'managed_teams': list(request.user.team_memberships.filter(role='admin', is_active=True).values('team_id', 'team__name', 'team__code')),
@@ -477,7 +479,11 @@ def members(request):
             if (user_id, platform, account) in bindings:
                 problems_by_user.setdefault(user_id, set()).add((platform, contest_key, problem_key))
         ac_counts = {user_id: len(problems) for user_id, problems in problems_by_user.items()}
+    roster = list(membership.team.memberships.filter(is_active=True,user__is_active=True,user__is_superuser=False).select_related('user'))
+    from .avatar_images import member_urls
+    avatars = member_urls(roster)
     rows = [{'id': member.id, 'name': member.display_name, 'role': member.role, 'team_id': membership.team_id,
+             'avatar': avatars.get(member.pk),
              'account': member.user.username if request.user.is_superuser else '',
              'is_system_admin': member.user.is_superuser,
              'can_kick': not member.user.is_superuser and member.user_id != request.user.pk and
@@ -485,7 +491,7 @@ def members(request):
              'can_manage_role': request.user.is_superuser and not member.user.is_superuser,
              'score': scores.get(member.id, 0), 'submissions': counts.get(member.id, 0),
              'ac_problems': ac_counts.get(member.user_id, 0) + submission_ac_counts.get(member.id, 0)}
-            for member in membership.team.memberships.filter(is_active=True,user__is_active=True,user__is_superuser=False).select_related('user')]
+            for member in roster]
     if request.user.is_superuser and membership.team.currency_enabled:
         from .models import CurrencyBalance
         balances = dict(CurrencyBalance.objects.filter(team=membership.team).values_list('member_id', 'balance'))

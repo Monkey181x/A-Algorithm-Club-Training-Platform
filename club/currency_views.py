@@ -7,6 +7,7 @@ import io
 import uuid
 import calendar
 import warnings
+import hashlib
 from PIL import Image, UnidentifiedImageError
 from datetime import datetime, timedelta
 from django.core.files.base import ContentFile
@@ -214,7 +215,10 @@ def api_contest_submission(request):
 
 
 def shop_item_icon_url(item):
-    return f"/api/currency/shop/items/{item.pk}/icon" if item.icon else None
+    if not item.icon:
+        return None
+    version = hashlib.sha256(item.icon.name.encode()).hexdigest()[:16]
+    return f"/api/currency/shop/items/{item.pk}/icon?v={version}"
 
 
 @api_login_required

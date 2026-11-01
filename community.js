@@ -42,7 +42,11 @@ function setDetailAvatar(holder,id,name){
  holder.textContent=(name||'').slice(0,1);holder.classList.add('synced-member-avatar');
   delete holder.dataset.avatarMember;
  if(!id)return;holder.dataset.avatarMember=String(id);
- const image=document.createElement('img');image.src=`/api/members/${Number(id)}/avatar?v=${Date.now()}`;image.alt='';image.onerror=()=>image.remove();holder.append(image);
+ const source=memberAvatarSource(id);if(!source)return;
+ holder.dataset.avatarFallback=(name||'').slice(0,1);
+ const image=document.createElement('img');image.src=source;image.alt='';image.decoding='async';
+ image.onload=()=>{if(image.parentElement===holder)holder.replaceChildren(image);};
+ image.onerror=()=>{if(image.parentElement===holder)holder.textContent=holder.dataset.avatarFallback;};holder.append(image);
 }
 const ownRecords = new Map();
 let rejectionResolver = null;

@@ -14,12 +14,14 @@ RATING_PLATFORMS = {
 def ranking_data(member, scope, platform='codeforces'):
     members = list(TeamMembership.objects.filter(team=member.team, is_active=True,
         user__is_active=True, user__is_superuser=False).order_by('id'))
+    from .models import UserProfile
+    from .avatar_images import url_for
+    profiles = {p.user_id: p for p in UserProfile.objects.filter(user_id__in=[m.user_id for m in members])}
     if scope == 'wealth':
         from .grades import grade_on
-        from .models import UserProfile
-        profiles = {p.user_id: p for p in UserProfile.objects.filter(user_id__in=[m.user_id for m in members])}
         members = [m for m in members if grade_on(profiles.get(m.user_id)) != 4]
-    rows = {m.pk: {'memberId':m.pk, 'name':m.display_name, 'isCurrent':m.pk==member.pk} for m in members}
+    rows = {m.pk: {'memberId':m.pk, 'name':m.display_name, 'isCurrent':m.pk==member.pk,
+        'avatar':url_for(profiles.get(m.user_id), m.pk, 'small')} for m in members}
     if scope == 'checkin':
         days = defaultdict(set)
         for mid, day in CheckinRecord.objects.filter(member_id__in=rows, checkin_date__lte=timezone.localdate()).values_list('member_id','checkin_date'):

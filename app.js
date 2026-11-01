@@ -199,8 +199,15 @@ document.addEventListener('click', async (event) => { if (event.target.id !== 'l
 const liveStyle = document.createElement('style'); liveStyle.textContent = '.my-submissions-live{margin-top:14px;padding:21px}.live-submission-row{display:flex;align-items:center;gap:12px;padding:13px 0;border-top:1px solid #edf0ee}.live-submission-info{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}.live-submission-info strong{font-size:12px}.live-submission-info small{font-size:10px;color:var(--muted)}.submission-thumb{width:44px;height:44px;border-radius:7px;background:#eef7f5;display:grid;place-items:center;overflow:hidden;color:var(--teal);flex:none}.submission-thumb img{width:100%;height:100%;object-fit:cover}.live-submission-row .review-view{color:var(--teal-dark);font-size:11px;font-weight:700;white-space:nowrap}.upload-preview{width:80px;height:55px;object-fit:cover;border-radius:6px;margin-bottom:4px}.status-tag.rejected{color:#b35d55;background:#fbeceb}'; document.head.appendChild(liveStyle);
 const accessibilityStyle = document.createElement('style'); accessibilityStyle.textContent = '.toast{transition:transform .25s ease,opacity .25s ease}.search-box input:focus-visible{outline:2px solid var(--teal);outline-offset:2px}'; document.head.appendChild(accessibilityStyle);
 const escapeHtml = (value='') => String(value).replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
-function memberAvatar(memberId, name, className='leader-avatar') {
-  return `<span class="${className} synced-member-avatar" data-avatar-member="${Number(memberId)}">${escapeHtml((name || '').slice(0,1))}<img src="/api/members/${Number(memberId)}/avatar" alt="" loading="lazy" onerror="this.remove()" /></span>`;
+const memberAvatarSources = new Map();
+function memberAvatarSource(memberId) {
+  const id = Number(memberId);
+  return memberAvatarSources.has(id) ? memberAvatarSources.get(id) : `/api/members/${id}/avatar?size=small`;
+}
+function memberAvatar(memberId, name, className='leader-avatar', source=undefined) {
+  if (source !== undefined) memberAvatarSources.set(Number(memberId), source);
+  const url = memberAvatarSource(memberId);
+  return `<span class="${className} synced-member-avatar" data-avatar-member="${Number(memberId)}" data-avatar-fallback="${escapeHtml((name || '').slice(0,1))}">${escapeHtml((name || '').slice(0,1))}${url ? `<img src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async" width="96" height="96" onload="this.parentElement.replaceChildren(this)" onerror="this.parentElement.textContent=this.parentElement.dataset.avatarFallback" />` : ''}</span>`;
 }
 
 function renderLeaderboard(mode='checkin', target='#leaderboardList') {
@@ -216,7 +223,7 @@ function renderLeaderboard(mode='checkin', target='#leaderboardList') {
     : rows.map(row => `
       <button type="button" class="leader-row ${row.isCurrent ? 'you' : ''}" data-ranking-member="${row.memberId}" aria-label="查看${escapeHtml(uiMemberName(row.name))}的历史提交">
         <span class="leader-rank ${row.rank && row.rank <= 3 ? 'top' : ''}">${row.rank || '—'}</span>
-        <span class="leader-member">${memberAvatar(row.memberId,row.name)}<span class="leader-name">${escapeHtml(uiMemberName(row.name))}${row.isCurrent ? '（你）' : ''}</span></span>
+        <span class="leader-member">${memberAvatar(row.memberId,row.name,'leader-avatar',row.avatar)}<span class="leader-name">${escapeHtml(uiMemberName(row.name))}${row.isCurrent ? '（你）' : ''}</span></span>
         <span class="leader-score">${row.value ?? '—'}<small> ${escapeHtml(row.unit)}</small></span>
         <span class="leader-count">${escapeHtml(row.detail)}${row.value === null ? ' · 暂无评级' : ''}</span>
       </button>`).join('');
@@ -1272,12 +1279,20 @@ async function refreshAfterMutation({refreshAdmin = false} = {}) {
   renderLeaderboard('checkin','#leaderboardListFull');
 }
 
-window.addEventListener('personal-profile-saved', () => {
+window.addEventListener('personal-profile-saved', event => {
+  const id = Number(event.detail?.memberId);
+  const source = event.detail?.avatar;
+  if (id && source !== undefined) memberAvatarSources.set(id, source);
   document.querySelectorAll('.synced-member-avatar').forEach(holder => {
+    if (!id || Number(holder.dataset.avatarMember) !== id || source === undefined) return;
+    if (holder.querySelector('img')?.getAttribute('src') === source) return;
     holder.querySelector('img')?.remove();
+    if (!source) return;
     const image = document.createElement('img');
-    image.alt = ''; image.onerror = () => image.remove();
-    image.src = `/api/members/${holder.dataset.avatarMember}/avatar?v=${Date.now()}`;
+    image.alt = ''; image.decoding = 'async';
+    image.onload = () => { if (image.parentElement === holder) holder.replaceChildren(image); };
+    image.onerror = () => { if (image.parentElement === holder) holder.textContent = holder.dataset.avatarFallback || ''; };
+    image.src = source;
     holder.append(image);
   });
   refreshAfterMutation();
@@ -1376,7 +1391,7 @@ async function loadMembersLive() {
       grid.innerHTML = '<div class="queue-empty">当前团队暂无成员数据</div>';
       return;
     }
-grid.innerHTML = members.map((member) => `<article class="member-card" data-member="${escapeHtml(uiMemberName(member.name))}"><div class="member-card-head"><button type="button" class="member-identity-entry" data-member-history="${member.id}">${memberAvatar(member.id,member.name,'member-avatar dark')}<span><strong>${escapeHtml(uiMemberName(member.name))}</strong><small>${member.is_system_admin ? '系统管理员' : member.role === 'admin' ? '团队管理员' : '普通用户'}</small></span></button><span class="member-status">活跃</span></div><div class="member-card-stats"><div><span>本周提交</span><strong>${member.submissions} <small>次</small></strong></div><div><span>本周积分</span><strong>${member.score}</strong></div><div><span>本周 AC 题数</span><strong>${member.ac_problems ?? 0} <small>题</small></strong></div></div><div class="member-card-actions">${member.can_kick ? `<button class="member-action-button danger" type="button" data-member-kick="${member.id}" data-team-id="${member.team_id}" data-name="${escapeHtml(uiMemberName(member.name))}" data-team-name="${escapeHtml(payload.team_name)}">踢出用户</button>` : ''}${member.can_manage_role ? `<button class="member-action-button" type="button" data-member-role="${member.role === 'admin' ? 'member' : 'admin'}" data-team-id="${member.team_id}" data-account="${escapeHtml(member.account)}">${member.role === 'admin' ? '取消团队管理' : '设置团队管理'}</button>` : ''}</div></article>`).join('');
+grid.innerHTML = members.map((member) => `<article class="member-card" data-member="${escapeHtml(uiMemberName(member.name))}"><div class="member-card-head"><button type="button" class="member-identity-entry" data-member-history="${member.id}">${memberAvatar(member.id,member.name,'member-avatar dark',member.avatar)}<span><strong>${escapeHtml(uiMemberName(member.name))}</strong><small>${member.is_system_admin ? '系统管理员' : member.role === 'admin' ? '团队管理员' : '普通用户'}</small></span></button><span class="member-status">活跃</span></div><div class="member-card-stats"><div><span>本周提交</span><strong>${member.submissions} <small>次</small></strong></div><div><span>本周积分</span><strong>${member.score}</strong></div><div><span>本周 AC 题数</span><strong>${member.ac_problems ?? 0} <small>题</small></strong></div></div><div class="member-card-actions">${member.can_kick ? `<button class="member-action-button danger" type="button" data-member-kick="${member.id}" data-team-id="${member.team_id}" data-name="${escapeHtml(uiMemberName(member.name))}" data-team-name="${escapeHtml(payload.team_name)}">踢出用户</button>` : ''}${member.can_manage_role ? `<button class="member-action-button" type="button" data-member-role="${member.role === 'admin' ? 'member' : 'admin'}" data-team-id="${member.team_id}" data-account="${escapeHtml(member.account)}">${member.role === 'admin' ? '取消团队管理' : '设置团队管理'}</button>` : ''}</div></article>`).join('');
     members.forEach((member,index) => {
       if (!Object.hasOwn(member,'currency_balance')) return;
       const button=document.createElement('button'); button.type='button'; button.className='member-currency-button';

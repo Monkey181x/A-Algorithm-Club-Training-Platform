@@ -22,9 +22,12 @@
     if (!entry) return;
     entry.querySelector('strong').textContent = info.name;
     const avatar = entry.querySelector('.profile-avatar');
-    avatar.replaceChildren();
-    if (info.avatar) {
-      const image = document.createElement('img'); image.src = info.avatar + '?v=' + Date.now(); image.alt = '';
+    avatar.textContent = (info.name || '').slice(0, 1);
+    const source = info.avatar_small || info.avatar;
+    if (source) {
+      const image = document.createElement('img'); image.src = source; image.alt = ''; image.decoding='async';
+      image.onload=()=>{if(image.parentElement===avatar)avatar.replaceChildren(image);};
+      image.onerror=()=>{if(image.parentElement===avatar)avatar.textContent=(info.name||'').slice(0,1);};
       avatar.append(image);
     } else avatar.textContent = (info.name || '').slice(0, 1);
   }
@@ -33,8 +36,13 @@
     target.textContent = text; target.classList.toggle('is-error', bad);
   }
   function avatarPreview(url, name) {
-    const target = page.querySelector('#personalAvatar'); target.replaceChildren();
-    if (url) { const image = document.createElement('img'); image.src = url; image.alt = '头像预览'; target.append(image); }
+    const target = page.querySelector('#personalAvatar'); target.textContent = (name || '').slice(0, 1);
+    if (url) {
+      const image = document.createElement('img'); image.src = url; image.alt = '头像预览'; image.decoding='async';
+      image.onload=()=>{if(image.parentElement===target)target.replaceChildren(image);};
+      image.onerror=()=>{if(image.parentElement===target)target.textContent=(name||'').slice(0,1);};
+      target.append(image);
+    }
     else target.textContent = (name || '').slice(0, 1);
   }
   function renderGrade() {
@@ -91,11 +99,11 @@
       try {
         const result = await request('/api/profile', {method:'POST', body:new FormData(event.target)});
         data = result; renderGrade(); updateHeader(result); message('个人资料已保存');
-        window.dispatchEvent(new CustomEvent('personal-profile-saved'));
+        window.dispatchEvent(new CustomEvent('personal-profile-saved',{detail:{memberId:result.member_id,avatar:result.member_avatar}}));
         page.querySelector('#personalName').value = result.name;
         page.querySelector('#personalAvatarFile').value = '';
         if (objectURL) URL.revokeObjectURL(objectURL); objectURL = null;
-        avatarPreview(result.avatar ? result.avatar + '?v=' + Date.now() : null, result.name);
+        avatarPreview(result.avatar, result.name);
       } catch (error) { message(error.message, true); }
       finally { button.disabled = false; }
     };
