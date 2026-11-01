@@ -3,24 +3,24 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function fixture() {
+function fixture(stops = Array.from({length:14}, (_, i) => i*100)) {
   const handlers = {}, timers = new Map(), frames = new Map(), calls = [];
   let clock = 0, next = 0, captured = null;
   const track = {
     dataset:{}, clientWidth:700, scrollWidth:1400, scrollLeft:350,
-    classList:{add(){},remove(){}},
+    classList:{add(){},remove(){},toggle(){}},
     addEventListener(type, handler, options) { handlers[type] = {handler,options}; },
-    querySelectorAll:() => Array.from({length:14}, (_, i) => ({offsetLeft:i*100})),
+    querySelectorAll:() => stops.map(left => ({getBoundingClientRect:() => ({left:40+left-track.scrollLeft})})),
     scrollTo(options) { calls.push(options); this.scrollLeft = options.left; },
     setPointerCapture(id) { captured = id; },
     hasPointerCapture:id => captured === id,
     releasePointerCapture() { captured = null; },
   };
   const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');
-  const start = source.indexOf('function wirePulseAtlas()');
-  const end = source.indexOf('\nfunction formatRemaining', start);
-  vm.runInNewContext(source.slice(start,end)+'\nwirePulseAtlas();', {
-    $:() => track, ResizeObserver:class {observe(){}},
+  const start = source.indexOf('function wireHorizontalDateScroll(');
+  const end = source.indexOf('\nlet refreshActivityHeatScroll', start);
+  const refresh = vm.runInNewContext(source.slice(start,end)+"\nwireHorizontalDateScroll(track, '.activity-month-section');", {
+    track, ResizeObserver:class {observe(){}},
     matchMedia:() => ({matches:true}), selectPulseDay(){},
     setTimeout(fn, delay) { const id = ++next; timers.set(id,{fn,at:clock+delay}); return id; },
     clearTimeout:id => timers.delete(id),
@@ -40,7 +40,7 @@ function fixture() {
   const finger = {identifier:1,clientX:300,clientY:40};
   const down = () => emit('touchstart',{changedTouches:[finger],touches:[finger]});
   const up = () => emit('touchend',{changedTouches:[finger],touches:[]});
-  return {track,handlers,calls,emit,advance,down,up,finger};
+  return {track,handlers,calls,emit,advance,down,up,finger,refresh};
 }
 
 test('native touch takeover and a stationary finger never trigger snapping', () => {
@@ -91,4 +91,33 @@ test('mouse dragging still follows the pointer and snaps on release', () => {
   f.emit('pointerup',{pointerId:7});
   assert.equal(f.track.scrollLeft,400);
   f.emit('click',{detail:1,preventDefault(){},stopImmediatePropagation(){}});
+});
+
+test('unequal month widths snap using visual positions across nested offset parents', () => {
+  const f = fixture([0,115,251,366,502,638,753]);
+  f.track.scrollLeft = 430; f.emit('scrollend');
+  assert.equal(f.calls.at(-1).left,366);
+  f.refresh(); f.advance(500);
+  f.track.scrollLeft = 580; f.emit('scroll'); f.advance(200);
+  assert.equal(f.calls.at(-1).left,502);
+  f.advance(500); f.track.scrollLeft = 700; f.emit('scrollend');
+  assert.equal(f.track.scrollLeft,700);
+});
+
+test('a heatmap that fits does not intercept dragging or disable date clicks', () => {
+  const f = fixture(); f.track.scrollWidth = f.track.clientWidth;
+  f.emit('pointerdown',{pointerId:7,pointerType:'mouse',button:0,clientX:300,clientY:40});
+  f.emit('pointermove',{pointerId:7,clientX:180,clientY:40});
+  f.emit('pointerup',{pointerId:7});
+  let blocked = false;
+  f.emit('click',{detail:1,preventDefault(){blocked=true;},stopImmediatePropagation(){blocked=true;}});
+  assert.equal(f.calls.length,0); assert.equal(blocked,false);
+});
+
+test('continuous layout with repeated week positions keeps the final month reachable', () => {
+  const f = fixture([0,0,100,100,200,200,300,400,500,600,700,800]);
+  f.track.scrollLeft = 695; f.emit('scrollend');
+  assert.equal(f.calls.at(-1).left,600);
+  f.advance(500); f.track.scrollLeft = 700; f.emit('scrollend');
+  assert.equal(f.track.scrollLeft,700);
 });
