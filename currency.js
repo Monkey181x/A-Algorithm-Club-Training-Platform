@@ -431,6 +431,31 @@ const CurrencyModule = (() => {
   }
 
   // Render shop view
+  const consumableUsesInFlight = new Set();
+  const consumableUseRequests = new Map();
+  async function useConsumable(inventoryId) {
+    if (consumableUsesInFlight.has(inventoryId)) return false;
+    consumableUsesInFlight.add(inventoryId);
+    try {
+      if (!await window.clubDialog.confirm({title:'使用消耗品',text:'使用 1 件并提交派送，管理员确认后将标记为“已消耗”。',confirmText:'使用'})) return false;
+      if (!consumableUseRequests.has(inventoryId)) consumableUseRequests.set(inventoryId,window.clubApi.requestId());
+      const response = await window.clubApi.request(`/api/currency/inventory/${inventoryId}/use`, {
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({request_id:consumableUseRequests.get(inventoryId)}),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        if (response.status < 500) consumableUseRequests.delete(inventoryId);
+        throw Error(result.error || '使用未完成');
+      }
+      consumableUseRequests.delete(inventoryId);
+      showToast(result.status === 'reclaimed' ? '该物品已回收并返还 Coins' : result.status === 'consumed' ? '该物品已消耗' : '已提交，正在派送中');
+      return true;
+    } catch(error) {
+      showToast(error.message || '使用结果待确认，请重试；相同请求不会重复扣除物品。');
+      return false;
+    } finally { consumableUsesInFlight.delete(inventoryId); }
+  }
   let shopRenderVersion = 0;
   async function renderShopView(container) {
     const version = ++shopRenderVersion;
@@ -484,7 +509,7 @@ const CurrencyModule = (() => {
                 ${!backpack && item.purchase_blocked ? `<small class="purchase-limit-info">${escape(item.purchase_block_reason)}</small>` : ''}
               </div>
               <div class="shop-item-footer">
-                ${backpack ? `${item.status ? `<span class="shop-owned-label">${({ready:'待核销',redeemed:'已核销',dispatching:'派发中',delivered:'派送成功'})[item.status]}</span>` : `<span class="shop-owned-label">当前拥有</span><strong class="shop-owned-count">${item.quantity}<small> 个</small></strong>`}${item.can_redeem ? `<button class="primary-button" type="button" data-redeem-card="${item.fulfillment_id}">消耗并获取卡密</button>` : ''}` : `
+                ${backpack ? `${item.status ? `<span class="shop-owned-label">${({ready:'待核销',redeemed:'已核销',dispatching:'派送中',delivered:'派送成功',consumed:'已消耗',reclaimed:'已回收'})[item.status]}</span>` : `<span class="shop-owned-label">当前拥有</span><strong class="shop-owned-count">${item.quantity}<small> 个</small></strong>`}${item.can_use ? `<button class="primary-button" type="button" data-use-consumable="${item.inventory_id}">使用</button>` : ''}${item.can_redeem ? `<button class="primary-button" type="button" data-redeem-card="${item.fulfillment_id}">消耗并获取卡密</button>` : ''}` : `
                 <div class="shop-item-price">
                   <img src="${escape(coinIconSrc)}" alt="" class="shop-price-coin" aria-hidden="true" />
                   <strong>${item.price}</strong><span>RBC</span>
@@ -540,6 +565,11 @@ const CurrencyModule = (() => {
       });
     }
 
+    container.querySelectorAll('[data-use-consumable]').forEach(button=>button.onclick=async()=>{
+      button.disabled=true;
+      try {if(await useConsumable(button.dataset.useConsumable))await renderShopView(container);}
+      finally {button.disabled=false;}
+    });
     container.querySelectorAll('[data-redeem-card]').forEach(button=>button.onclick=async()=>{
       if(!await clubDialog.confirm({title:'核销物品',text:'消耗1个物品并获取对应卡密，确认继续？',confirmText:'获取卡密'}))return;
       button.disabled=true;

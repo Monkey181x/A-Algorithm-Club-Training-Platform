@@ -54,7 +54,8 @@ class CommunityTests(TestCase):
     def submit(self):
         with patch('club.problem_parser.get_problem', return_value=self.problem):
             response = self.client.post('/api/submissions', {'problem_url': URL, 'week_id': self.week.pk,
-                'proof': self.image(), 'logic': '完整题解\n第二行', 'blog': 'https://example.com/blog'})
+                'proof': self.image(), 'logic': '完整题解\n第二行', 'blog': 'https://example.com/blog',
+                'code': 'int main() {}', 'code_language': 'cpp'})
         self.assertEqual(response.status_code, 201, response.content)
         return Submission.objects.get(pk=response.json()['submission']['id'])
 

@@ -323,6 +323,8 @@ class CurrencyTransaction(models.Model):
     PURCHASE = "purchase"
     ADMIN_ADJUST = "admin_adjust"
     RETIREMENT_SUBSIDY = "retirement_subsidy"
+    REWARD_REVERSAL = "reward_reversal"
+    ITEM_RECOVERY = "item_recovery"
 
     TYPE_CHOICES = [
         (CHECKIN, "每日签到"),
@@ -331,6 +333,8 @@ class CurrencyTransaction(models.Model):
         (PURCHASE, "商店购买"),
         (ADMIN_ADJUST, "管理员调整"),
         (RETIREMENT_SUBSIDY, "退休金补贴"),
+        (REWARD_REVERSAL, "签到奖励撤回"),
+        (ITEM_RECOVERY, "物品回收返还"),
         ("tip_sent", "打赏支出"),
         ("tip_received", "收到打赏"),
     ]
@@ -359,6 +363,7 @@ class CheckinRecord(models.Model):
     member = models.ForeignKey(TeamMembership, on_delete=models.CASCADE, related_name="checkin_records")
     checkin_date = models.DateField(verbose_name="签到日期")
     is_makeup = models.BooleanField(default=False, verbose_name="是否补签")
+    reward_amount = models.PositiveIntegerField(default=0, verbose_name="已发签到奖励")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -524,6 +529,8 @@ class ShopFulfillment(models.Model):
     status = models.CharField(max_length=16, default='ready')
     request_key = models.UUIDField(default=uuid.uuid4, unique=True)
     encrypted_code = models.TextField(blank=True)
+    refunded_amount = models.PositiveIntegerField(default=0)
+    reclaimed_at = models.DateTimeField(null=True, blank=True)
     redeemed_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     delivered_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -576,6 +583,7 @@ class WeeklyStreakGrant(models.Model):
     week_start = models.DateField()
     days = models.PositiveSmallIntegerField()
     amount = models.PositiveIntegerField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

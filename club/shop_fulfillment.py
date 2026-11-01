@@ -1,14 +1,15 @@
 """Reserved stock, private redemption and the workbench dispatch inbox."""
 import hashlib
 import json
+import uuid
 from urllib.parse import urlsplit
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from .models import ShopItem, ShopCode, ShopFulfillment
+from .models import ShopItem, ShopCode, ShopFulfillment, UserInventory, Purchase, TeamMembership
 from .problem_parser import key_cipher, http_fetch, canonical_problem
 from .views import api_login_required, api_error, membership_for, body
 
@@ -115,6 +116,52 @@ def fulfillment_inventory(member):
         for unit in ShopFulfillment.objects.filter(purchase__member=member, purchase__team=member.team).select_related('purchase__item').order_by('-pk')]
 
 
+@api_login_required
+@require_http_methods(['POST'])
+@transaction.atomic
+def use_consumable(request, inventory_id):
+    member = membership_for(request)
+    if not member or not member.pk or request.user.is_superuser or getattr(request, 'admin_test_mode', False):
+        return api_error('请使用持有物品的成员账号', 403)
+    if not member.team.currency_enabled:
+        return api_error('该团队未启用货币系统', 403)
+    try:
+        token = uuid.UUID(str(body(request).get('request_id', '')))
+    except (ValueError, TypeError, AttributeError):
+        return api_error('使用请求编号无效', 400)
+    if not TeamMembership.objects.select_for_update().filter(pk=member.pk, is_active=True).exists():
+        return api_error('当前成员权限已失效', 403)
+    inventory = UserInventory.objects.select_for_update(of=('self',)).filter(pk=inventory_id,
+        member=member, team=member.team, item__item_type='consumable').select_related('item').first()
+    if not inventory:
+        return api_error('消耗品不存在', 404)
+    prior = ShopFulfillment.objects.filter(request_key=token).select_related('purchase').first()
+    if prior:
+        if prior.purchase.member_id != member.pk or prior.purchase.item_id != inventory.item_id or prior.purchase.team_id != member.team_id:
+            return api_error('使用请求编号已被使用', 409)
+        return private_json({'ok': True, 'duplicate': True, 'status': prior.status, 'fulfillment_id': prior.pk})
+    if inventory.quantity < 1:
+        return api_error('物品数量不足', 409)
+    # Existing consumables already have purchase history but no per-unit fulfillment.
+    # Allocate one unused purchase unit on demand, keeping old backpacks usable.
+    from django.db.models import Count, F
+    purchase = Purchase.objects.filter(member=member, team=member.team, item=inventory.item).annotate(
+        used_units=Count('fulfillments')).filter(quantity__gt=F('used_units')).order_by('pk').first()
+    if not purchase:
+        return api_error('物品购买记录不完整，请联系管理员', 409)
+    try:
+        with transaction.atomic():
+            used_sequences = set(purchase.fulfillments.values_list('sequence', flat=True))
+            sequence = next(number for number in range(1,purchase.quantity+1) if number not in used_sequences)
+            unit = ShopFulfillment.objects.create(purchase=purchase, sequence=sequence,
+                item_name=inventory.item.name, status='dispatching', request_key=token)
+    except IntegrityError:
+        return api_error('使用请求编号已被使用，请刷新后重试', 409)
+    inventory.quantity -= 1
+    inventory.save(update_fields=['quantity', 'updated_at'])
+    return private_json({'ok': True, 'status': unit.status, 'fulfillment_id': unit.pk})
+
+
 def fetch_card(item, unit):
     config = json.loads(key_cipher().decrypt(item.encrypted_card_api.encode()).decode())
     headers = {**config.get('headers', {}), 'Idempotency-Key': str(unit.request_key), 'Content-Type': 'application/json'}
@@ -137,6 +184,7 @@ def redeem(request, unit_id):
     member = membership_for(request)
     if not member or not member.pk or request.user.is_superuser:
         return api_error('请使用购买商品的成员账号', 403)
+    TeamMembership.objects.select_for_update().get(pk=member.pk)
     unit = ShopFulfillment.objects.select_for_update().filter(pk=unit_id,
         purchase__member=member, purchase__team=member.team).select_related('purchase__item').first()
     if not unit or unit.purchase.item.item_type != 'redeem_code':
@@ -173,27 +221,32 @@ def dispatch_inbox(request):
         return api_error('需要团队管理权限', 403)
     if getattr(request, 'admin_test_mode', False):
         return api_error('请退出测试模式后处理发货', 403)
-    query = ShopFulfillment.objects.filter(purchase__item__item_type='physical')
+    query = ShopFulfillment.objects.filter(purchase__item__item_type__in=['physical', 'consumable'])
     if not request.user.is_superuser:
         query = query.filter(purchase__team=member.team)
     if request.method == 'GET':
-        rows = query.filter(status='dispatching').select_related('purchase__member', 'purchase__team').order_by('pk')
+        rows = query.filter(status='dispatching').select_related('purchase__member', 'purchase__team', 'purchase__item').order_by('pk')
         return private_json({'pending_count': rows.count(), 'orders': [{'id': unit.pk, 'item_name': unit.item_name,
-            'member_name': unit.purchase.member.display_name, 'team_name': unit.purchase.team.name, 'purchased_at': unit.purchase.purchased_at.isoformat()} for unit in rows[:200]]})
+            'member_name': unit.purchase.member.display_name, 'team_name': unit.purchase.team.name,
+            'item_type': unit.purchase.item.item_type, 'purchased_at': unit.purchase.purchased_at.isoformat()} for unit in rows[:200]]})
     with transaction.atomic():
         from .currency_services import positive_id
         try:
             identity = positive_id(body(request).get('id'))
         except ValueError as error:
             return api_error(str(error), 400)
-        unit = query.select_for_update().filter(pk=identity).first()
+        candidate = query.select_related('purchase').filter(pk=identity).first()
+        if candidate:
+            TeamMembership.objects.select_for_update().get(pk=candidate.purchase.member_id)
+        unit = query.select_for_update(of=('self',)).select_related('purchase__item').filter(pk=identity).first()
         if not unit:
             return api_error('派发记录不存在', 404)
-        if unit.status == 'delivered':
+        completed_status = 'consumed' if unit.purchase.item.item_type == 'consumable' else 'delivered'
+        if unit.status == completed_status:
             return private_json({'ok': True, 'duplicate': True})
         if unit.status != 'dispatching':
             return api_error('派发状态已变化', 409)
-        unit.status = 'delivered'
+        unit.status = completed_status
         unit.delivered_at = timezone.now()
         unit.delivered_by = request.user
         unit.save(update_fields=['status', 'delivered_at', 'delivered_by'])

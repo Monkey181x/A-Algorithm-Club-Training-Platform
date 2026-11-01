@@ -1,4 +1,5 @@
 /* RBC Currency System Styles */
+.shop-item-footer [data-use-consumable] { margin-left: auto; }
 
 /* Currency balance in topbar */
 .currency-balance {
@@ -18,6 +19,7 @@
   border-radius: 20px;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 700;
   transition: background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
