@@ -3,6 +3,7 @@
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const number = value => typeof value === 'number' ? value.toLocaleString('zh-CN') : '—';
   let page, backdrop, data, opened = false, closing = false, poll, objectURL, allowed = false, generation = 0;
+  let solvedBaselineSignature = null;
   const entry = document.getElementById('openProfile');
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
   let scrollState;
@@ -148,6 +149,10 @@
     card.dataset.signature = JSON.stringify(binding || null);
   }
   function renderBindings() {
+    const signature=JSON.stringify(data.bindings.map(binding=>[binding.platform,binding.solved_baseline?.captured_at]));
+    if(solvedBaselineSignature!==null && solvedBaselineSignature!==signature)
+      window.dispatchEvent(new Event('platform-solved-updated'));
+    solvedBaselineSignature=signature;
     const grid = page.querySelector('#platformGrid');
     for (const platform of Object.keys(data.platforms)) {
       let card = grid.querySelector(`[data-platform-card="${platform}"]`);

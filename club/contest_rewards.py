@@ -41,6 +41,8 @@ def reward_for(problem, member, profile=None):
         return 0, '', '比赛进度尚未完整核验'
     if not problem.accepted:
         return 0, '', '尚无可靠 AC 记录'
+    if problem.accepted_at is not None and problem.accepted_at < REWARD_START:
+        return 0, '', '2026-11-01 前的 AC 不发放奖励'
     # User policy: a proven AC with an unavailable timestamp is eligible.
     # Known non-contest/out-of-window timestamps never take this fallback.
     if problem.accepted_at is not None and not problem.official_ac:

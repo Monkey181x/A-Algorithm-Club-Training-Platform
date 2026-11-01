@@ -26,41 +26,16 @@ def training_activity(request):
     except ValueError:
         return api_error('请选择有效日期范围（最多 400 天）')
     semester = active_semester(member.team)
-    events, accepted = defaultdict(list), {}
-    # Same identity/source convention as the existing lifetime solved ranking.
-    # Repeated proof submissions and multiple teams never inflate AC totals.
-    proofs = Submission.objects.filter(member__user=request.user, is_valid=True,
-        problem__isnull=False, parts__kind=SubmissionPart.PROOF,
-        parts__status=SubmissionPart.APPROVED).select_related('problem')
-    for row in proofs:
-        key = ('submission', row.problem.identity)
-        old = accepted.get(key)
-        if old is None or row.record_date < old['date']:
-            accepted[key] = {'date': row.record_date, 'title': row.problem.title or row.problem.url,
-                             'url': row.problem.url, 'source': '本站通过记录'}
-    bindings = set(PlatformBinding.objects.filter(user=request.user).values_list('platform', 'account'))
-    contests = ContestProblemProgress.objects.filter(participation__user=request.user,
-        accepted=True).select_related('participation')
-    for row in contests:
-        p = row.participation
-        if p.source_data.get('demo') or (p.platform, p.account) not in bindings:
-            continue
-        key = ('contest', f'{p.platform}:{p.contest_key}:{row.problem_key}')
-        day = timezone.localdate(row.accepted_at) if row.accepted_at else None
-        old = accepted.get(key)
-        if old is None or day and (old['date'] is None or day < old['date']):
-            accepted[key] = {'date': day, 'title': row.title or row.label,
-                             'url': row.url, 'source': p.platform + ' · 比赛 AC'}
-    for source, key in SolvedProblemCredit.objects.filter(user=request.user).values_list('source', 'problem_key'):
-        accepted.setdefault((source, key), {'date': None})
-    undated = sum(item['date'] is None for item in accepted.values())
-    ac_by_date = defaultdict(int)
-    for item in accepted.values():
-        day = item['date']
-        if day is not None and day <= today:
-            ac_by_date[day] += 1
-            if start <= day <= end:
-                events[day].append(dict(item, date=day.isoformat(), kind='ac'))
+    from .solved import solved_evidence
+    evidence=solved_evidence([request.user.pk])[request.user.pk]
+    events=defaultdict(list)
+    ac_by_date=defaultdict(int)
+    for item in evidence['items']:
+        day=item['date']
+        if day is not None and day<=today:
+            ac_by_date[day]+=1
+            if start<=day<=end:
+                events[day].append(dict(item,date=day.isoformat(),kind='ac'))
     daily_by_date = defaultdict(int)
     # Daily mode is current-team valid training submissions, not check-in rewards.
     for row in Submission.objects.filter(member=member, is_valid=True,
@@ -103,7 +78,7 @@ def training_activity(request):
     display_semester=active_semester(request.test_target_team) if getattr(request,'admin_test_mode',False) else semester
     response = JsonResponse({'today': today.isoformat(), 'start': start.isoformat(), 'end': end.isoformat(),
         'semester': {'name': display_semester.name, 'start': display_semester.starts_on.isoformat(), 'end': display_semester.ends_on.isoformat()} if display_semester else None,
-        'days': days, 'ac': dict(summary(ac_by_date), total=len(accepted), undated=undated),
+        'days': days, 'ac': dict(summary(ac_by_date), total=evidence['total'], undated=evidence['undated']),
         'daily': dict(summary(daily_by_date), total=sum(daily_by_date.values()))})
     response['Cache-Control'] = 'no-store'
     return response

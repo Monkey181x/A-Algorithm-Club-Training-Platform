@@ -10,9 +10,9 @@
   <link rel="icon" type="image/png" sizes="16x16" href="/static/images/rbc-favicon-16.png?v=original-20261101">
     <link rel="stylesheet" href="static/vendor/tom-select/tom-select.default.min.css" />
     <link rel="stylesheet" href="static/vendor/sweetalert2/sweetalert2.min.css" />
-    <link rel="stylesheet" href="styles.css?v=retirement-20261101" />
+    <link rel="stylesheet" href="styles.css?v=touch-highlight-20261101" />
     <link rel="stylesheet" href="currency-styles.css?v=shop-images-20261101" />
-    <link rel="stylesheet" href="profile.css?v=avatar-contain-20261101" />
+    <link rel="stylesheet" href="profile.css?v=mobile-profile-20261101" />
     <link rel="stylesheet" href="extensions.css" />
     <link rel="stylesheet" href="static/blog-editor.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="styles/atlas-enhanced.css" />
   <link rel="stylesheet" href="styles/site-theme.css?v=ui-20261101l" />
   <link rel="stylesheet" href="styles/gallery-week-picker.css?v=1" />
-<link rel="stylesheet" href="static/club-dialog.css?v=1" /><link rel="stylesheet" href="static/team-join.css?v=1" /><link rel="stylesheet" href="static/glass-drag.css?v=1"><link rel="stylesheet" href="theme-settings.css?v=language-tag-20261101" />
+<link rel="stylesheet" href="static/club-dialog.css?v=1" /><link rel="stylesheet" href="static/team-join.css?v=1" /><link rel="stylesheet" href="static/glass-drag.css?v=1"><link rel="stylesheet" href="theme-settings.css?v=mobile-submission-20261101" />
 <script src="theme-model.js?v=ui-20261101l"></script><script src="theme-settings.js?v=font-scale-20261101" defer></script>
 </head>
   <body>
@@ -165,7 +165,7 @@
             </div>
             <div class="training-right">
               <div class="activity-controls">
-                <label>统计口径<select id="activityMetric"><option value="ac">全部 AC 题目</option><option value="daily">每日一题提交</option></select></label>
+                <label>统计口径<select id="activityMetric"><option value="ac">全部 AC 题目</option></select></label>
                 <label>时间范围<select id="activityRange"><option value="month">按月</option><option value="semester">当前学期</option></select></label>
               </div>
               <section class="metric-grid activity-summary training-metrics" id="activitySummary" aria-label="本周积分、有效提交与连续签到" aria-live="polite"><article data-metric="score" class="metric-card featured">
@@ -197,13 +197,13 @@
 <article class="panel leaderboard-panel">
               <div class="panel-heading"><div><p class="section-label">TEAM RANKING</p><h2>团队排行榜</h2></div><button class="secondary-button" data-view-target="leaderboard" type="button">完整榜单</button></div>
 <div class="segmented segmented--ranking" role="tablist" aria-label="排行榜分类"><button class="segment active" data-ranking="checkin" type="button">签到榜</button><button class="segment" data-ranking="rating" type="button">Rating榜</button><button class="segment" data-ranking="solved" type="button">过题榜</button><button class="segment" data-ranking="wealth" type="button">财富榜</button></div>
-              <label class="rating-platform-filter" hidden>竞赛平台<select data-rating-platform aria-label="Rating榜竞赛平台"><option value="codeforces">Codeforces</option><option value="atcoder">AtCoder</option><option value="nowcoder">牛客</option><option value="luogu">洛谷</option><option value="leetcode_cn">LeetCode 中国站</option><option value="leetcode_us">LeetCode 国际站</option></select></label><div class="leaderboard-list" id="leaderboardList"></div>
+              <label class="rating-platform-filter solved-period-filter" hidden>过题范围<select class="select select-sm" data-solved-period aria-label="过题榜范围"><option value="semester">学期榜</option><option value="all">总榜</option></select></label><label class="rating-platform-filter" hidden>竞赛平台<select data-rating-platform aria-label="Rating榜竞赛平台"><option value="codeforces">Codeforces</option><option value="atcoder">AtCoder</option><option value="nowcoder">牛客</option><option value="luogu">洛谷</option><option value="leetcode_cn">LeetCode 中国站</option><option value="leetcode_us">LeetCode 国际站</option></select></label><div class="leaderboard-list" id="leaderboardList"></div>
             </article>
           </section>
         </div>
 
         <div class="page-view" id="submissionsView"><div class="page-heading"><div><p class="kicker">MY SUBMISSIONS</p><h1>我的提交</h1></div><button class="primary-button" id="openSubmissionSecondary" type="button"><span>＋</span>提交今日记录</button></div><div class="panel empty-state"><div class="empty-icon">□</div><h2>这里会留下你的训练轨迹</h2><p>本周已有 3 次有效提交，继续保持。</p><button class="secondary-button" id="emptyAction" type="button">提交今日记录</button></div></div>
-        <div class="page-view" id="leaderboardView"><div class="page-heading"><div><p class="kicker">TEAM RANKING</p><h1>排行榜</h1></div></div><div class="panel full-leaderboard"><div class="segmented segmented--ranking large" role="tablist" aria-label="排行榜分类"><button class="segment active" data-ranking="checkin" type="button">签到榜</button><button class="segment" data-ranking="rating" type="button">Rating榜</button><button class="segment" data-ranking="solved" type="button">过题榜</button><button class="segment" data-ranking="wealth" type="button">财富榜</button></div><label class="rating-platform-filter" hidden>竞赛平台<select data-rating-platform aria-label="Rating榜竞赛平台"><option value="codeforces">Codeforces</option><option value="atcoder">AtCoder</option><option value="nowcoder">牛客</option><option value="luogu">洛谷</option><option value="leetcode_cn">LeetCode 中国站</option><option value="leetcode_us">LeetCode 国际站</option></select></label><div class="leaderboard-list" id="leaderboardListFull"></div></div></div>
+        <div class="page-view" id="leaderboardView"><div class="page-heading"><div><p class="kicker">TEAM RANKING</p><h1>排行榜</h1></div></div><div class="panel full-leaderboard"><div class="segmented segmented--ranking large" role="tablist" aria-label="排行榜分类"><button class="segment active" data-ranking="checkin" type="button">签到榜</button><button class="segment" data-ranking="rating" type="button">Rating榜</button><button class="segment" data-ranking="solved" type="button">过题榜</button><button class="segment" data-ranking="wealth" type="button">财富榜</button></div><label class="rating-platform-filter solved-period-filter" hidden>过题范围<select class="select select-sm" data-solved-period aria-label="过题榜范围"><option value="semester">学期榜</option><option value="all">总榜</option></select></label><label class="rating-platform-filter" hidden>竞赛平台<select data-rating-platform aria-label="Rating榜竞赛平台"><option value="codeforces">Codeforces</option><option value="atcoder">AtCoder</option><option value="nowcoder">牛客</option><option value="luogu">洛谷</option><option value="leetcode_cn">LeetCode 中国站</option><option value="leetcode_us">LeetCode 国际站</option></select></label><div class="leaderboard-list" id="leaderboardListFull"></div></div></div>
         <div class="page-view" id="adminView"><div class="queue-empty">正在加载管理工作台…</div></div>
 
 <div class="page-view" id="showcaseView"><div class="page-heading"><div><p class="kicker">TEAM SUBMISSIONS</p><h1>团队提交</h1></div></div><div class="problem-toolbar"><label class="gallery-search"><input id="gallerySearch" type="search" placeholder="搜索题目、平台或成员…" aria-label="搜索团队提交"></label><button id="problemBack" class="secondary-button problem-back-button" type="button" hidden><svg class="ui-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m15 5-7 7 7 7"/></svg><span>返回题目列表</span></button></div><div class="problem-title-row"><h2 id="problemHeading">本周题目</h2><a id="problemOriginal" class="problem-original-icon" target="_blank" rel="noopener noreferrer" aria-label="在新窗口打开原题" title="打开原题" hidden><svg class="ui-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 17 17 7M7 7h10v10"/></svg></a></div><div id="showcaseGrid" class="problem-list"></div><button id="galleryMore" class="secondary-button" hidden>加载更多</button></div>
@@ -315,9 +315,9 @@
     <script src="static/shop-images.js?v=shop-images-20261101b"></script>
     <script src="currency.js?v=shop-images-20261101"></script>
     <script src="currency-admin.js?v=ui-20261101r"></script>
-    <script src="profile.js?v=avatar-contain-20261101"></script>
+    <script src="profile.js?v=solved-baseline-20261101"></script>
     <script src="extensions.js?v=ui-20261101l"></script>
-  <script src="app.js?v=avatar-contain-20261101"></script>
+  <script src="app.js?v=solved-baseline-20261101b"></script>
   <script src="static/glass-drag.js?v=1"></script>
   </body>
 </html>

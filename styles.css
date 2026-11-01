@@ -882,3 +882,7 @@ button.leader-row:hover{background:var(--teal-soft)}
 /* Hide scrollbars globally without disabling scrolling or keyboard navigation. */
 *{scrollbar-width:none!important;-ms-overflow-style:none!important;scrollbar-gutter:auto!important}
 *::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+
+/* Native touch highlights can linger on composited glass surfaces.
+   Keep authored active states and keyboard :focus-visible indicators. */
+html{-webkit-tap-highlight-color:transparent;}

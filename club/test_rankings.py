@@ -8,8 +8,8 @@ from . import test_community as fixtures
 class RankingTests(TestCase):
     setUp=fixtures.CommunityTests.setUp
 
-    def rows(self,scope,platform='codeforces'):
-        response=self.client.get('/api/leaderboard',{'scope':scope,'platform':platform})
+    def rows(self,scope,platform='codeforces',period='all'):
+        response=self.client.get('/api/leaderboard',{'scope':scope,'platform':platform,'period':period})
         self.assertEqual(response.status_code,200,response.content)
         return response.json()['rows']
 

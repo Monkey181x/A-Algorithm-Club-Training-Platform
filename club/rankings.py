@@ -11,7 +11,10 @@ RATING_PLATFORMS = {
 }
 
 
-def ranking_data(member, scope, platform='codeforces'):
+def ranking_data(member, scope, platform='codeforces', period='semester'):
+    if scope == 'solved' and period not in {'semester', 'all'}:
+        raise ValueError('请选择学期榜或总榜')
+    semester = None
     members = list(TeamMembership.objects.filter(team=member.team, is_active=True,
         user__is_active=True, user__is_superuser=False).order_by('id'))
     from .models import UserProfile
@@ -37,10 +40,16 @@ def ranking_data(member, scope, platform='codeforces'):
                 cursor -= timedelta(days=1)
             row.update(value=streak, unit='天', detail='当前连续签到')
     elif scope == 'solved':
-        from .solved import lifetime_solved_counts
-        totals = lifetime_solved_counts([m.user_id for m in members])
+        from .solved import lifetime_solved_counts, semester_solved_counts
+        ids = [m.user_id for m in members]
+        if period == 'all':
+            totals = lifetime_solved_counts(ids)
+        else:
+            from .views import active_semester
+            semester = active_semester(member.team)
+            totals = semester_solved_counts(ids, semester)
         for m in members:
-            rows[m.pk].update(value=totals.get(m.user_id, 0), unit='题', detail='累计过题')
+            rows[m.pk].update(value=totals.get(m.user_id, 0), unit='题', detail='累计过题' if period == 'all' else '本学期过题')
     elif scope == 'wealth':
         balances = dict(CurrencyBalance.objects.filter(team=member.team, member_id__in=rows).values_list('member_id','balance'))
         for mid,row in rows.items(): row.update(value=balances.get(mid,0), unit='RBC Coins', detail='当前余额')
@@ -76,4 +85,6 @@ def ranking_data(member, scope, platform='codeforces'):
             row['rank'] = rank
             last = row['value']
     return {'scope':scope, 'platform':platform if scope=='rating' else None,
+            'period':period if scope=='solved' else None,
+            'semester':{'id':semester.pk, 'name':semester.name, 'start':semester.starts_on.isoformat(), 'end':semester.ends_on.isoformat()} if semester else None,
             'platforms':RATING_PLATFORMS, 'rows':result}
