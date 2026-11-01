@@ -105,6 +105,18 @@ body:has(#dashboardView.active) .topbar{border-color:#D5E5FB}
 #dashboardView .content-grid .submission-row{min-height:52px;padding:10px 0}
 #dashboardView .leaderboard-panel .segmented{flex-shrink:0;margin-bottom:12px}
 #dashboardView .rating-platform-filter{flex-shrink:0}
+/* Let compact-screen rankings grow when platform filters or larger text need room. */
+@media(max-width:1150px){
+ #dashboardView .content-grid>.leaderboard-panel{height:auto;overflow:visible}
+ #dashboardView #leaderboardList{flex:0 0 auto;overflow:visible}
+ #dashboardView #leaderboardList>.leader-row{flex-shrink:0}
+}
+@media(max-width:760px){
+ .segmented.segmented--ranking{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%;overflow:visible}
+ .segmented.segmented--ranking>.segment{min-width:0;padding:10px 4px}
+ .segmented.segmented--ranking.ranking-tabs-wrapped{grid-template-columns:repeat(2,minmax(0,1fr));border-radius:20px}
+ .segmented--ranking>.segment-indicator{top:var(--segment-y,4px);height:var(--segment-height,32px)}
+}
 .sidebar .brand-name{white-space:nowrap;font-size:14px}
 /* Roomier desktop overview, aligned with the floating navigation bottom. */
 @media(min-width:1151px){

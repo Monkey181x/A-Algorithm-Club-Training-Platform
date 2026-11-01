@@ -656,6 +656,14 @@ function syncSegmented(group, selected = $('.segment.active', group)) {
     group.prepend(indicator);
   }
   const buttons = $$('.segment', group);
+  if (group.classList.contains('segmented--ranking')) {
+    group.classList.remove('ranking-tabs-wrapped');
+    if (window.matchMedia('(max-width:760px)').matches) {
+      const needsWrap = window.matchMedia('(max-width:360px)').matches || buttons.some(button => button.scrollWidth > button.clientWidth);
+      group.classList.toggle('ranking-tabs-wrapped', needsWrap);
+    }
+    indicator.style.removeProperty('transform');
+  }
   buttons.forEach((button) => {
     const isSelected = button === selected;
     button.classList.toggle('active', isSelected);
@@ -665,12 +673,22 @@ function syncSegmented(group, selected = $('.segment.active', group)) {
   });
   group.style.setProperty('--segment-x', `${selected.offsetLeft}px`);
   group.style.setProperty('--segment-width', `${selected.offsetWidth}px`);
+  group.style.setProperty('--segment-y', `${selected.offsetTop}px`);
+  group.style.setProperty('--segment-height', `${selected.offsetHeight}px`);
 }
 
 function initSegmentedControls() {
+  const rankingResize = new ResizeObserver(entries => {
+    const groups = new Set(entries.map(entry => entry.target.closest('.segmented--ranking')));
+    groups.forEach(group => { if (group?.offsetWidth) syncSegmented(group); });
+  });
   $$('.segmented').forEach((group) => {
     const selected = $('.segment.active', group) || $('.segment', group);
     syncSegmented(group, selected);
+    if (group.classList.contains('segmented--ranking')) {
+      rankingResize.observe(group);
+      $$('.segment', group).forEach(button => rankingResize.observe(button));
+    }
     $$('.segment', group).forEach((button, index) => {
       button.addEventListener('keydown', (event) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
