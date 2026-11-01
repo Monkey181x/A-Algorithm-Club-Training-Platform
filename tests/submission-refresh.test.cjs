@@ -68,3 +68,36 @@ test('the rejected-record action uses record eligibility rather than overview da
   assert.equal(calls[0][0],false);assert.equal(calls[0][1],record);
   assert.equal(context.resubmitting,8);
 });
+
+test('normal editing uses can_edit while rejected resubmission keeps its separate permission',async()=>{
+  const community=fs.readFileSync(require.resolve('../community.js'),'utf8');
+  for(const scenario of [
+    {can_edit:true,can_resubmit:false,edit:true,allowed:true},
+    {can_edit:false,can_resubmit:true,edit:true,allowed:false},
+    {can_edit:true,can_resubmit:false,edit:false,allowed:false},
+    {can_edit:false,can_resubmit:true,edit:false,allowed:true},
+    {can_edit:false,can_resubmit:false,edit:true,allowed:false},
+  ]){
+    const record={id:8,...scenario,record_date:'2026-10-30',week_id:2,problem_url:'x',parts:[]};
+    const entries=new Map(),calls=[],messages=[];
+    const context={ownRecords:new Map([[8,record]]),$:key=>{if(!entries.has(key))entries.set(key,{dataset:{}});return entries.get(key);},
+      openModal:async(...args)=>{calls.push(args);return true;},showToast:message=>messages.push(message),uiProblemTitle:x=>x,
+      setSubmissionCodeDraft(){},renderSubmissionDraftBlog(){},resubmitting:null,editingSubmission:null,
+      captureEditReturn:()=>({}),closeReview(){},restoreEditReturn(){},submissionEditReturnState:null};
+    vm.createContext(context);
+    vm.runInContext(community.slice(community.indexOf('async function beginResubmit('),community.indexOf("\ndocument.addEventListener('DOMContentLoaded'",community.indexOf('async function beginResubmit('))),context);
+    vm.runInContext(community.slice(community.indexOf('async function editOwnSubmission('),community.indexOf('\nfunction openTipDialog')),context);
+    await vm.runInContext(scenario.edit?'editOwnSubmission(8)':'beginResubmit(8)',context);
+    assert.equal(calls.length,scenario.allowed?1:0,JSON.stringify(scenario));
+    if(scenario.allowed){
+      assert.equal(messages.length,0);
+      assert.equal(context.resubmitting,scenario.edit?null:8);
+      assert.equal(context.editingSubmission,scenario.edit?8:null);
+      if(scenario.edit){
+        assert.equal(context.$('#proofImage').required,false);
+        assert.equal(context.$('#cancelSubmissionEdit').hidden,false);
+        assert.match(context.$('.form-note span:last-child').textContent,/编辑原提交/);
+      }
+    }
+  }
+});

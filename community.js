@@ -227,12 +227,15 @@ async function loadAdminQueue({append = false, page = 1} = {}) {
 function stopAdminQueuePolling() { reportRequest++; }
 function startAdminQueuePolling() { loadWorkbench(); }
 
-async function beginResubmit(id) {
+async function beginResubmit(id, {edit = false} = {}) {
   const record = ownRecords.get(Number(id));
   if (!record) return;
-  if (!record.can_resubmit) { showToast('该记录当前不能重新提交'); return false; }
+  if (!(edit ? record.can_edit : record.can_resubmit)) {
+    showToast(edit ? '该记录已截止或学期已归档' : '该记录当前不能重新提交');
+    return false;
+  }
   if (!await openModal(false, record)) return false;
-  resubmitting = record.id;
+  resubmitting = edit ? null : record.id;
   $('#submissionForm').dataset.weekId = record.week_id;
   $('#submissionForm').dataset.recordDate = record.record_date;
   $('.form-note span').textContent = `记录日期：${record.record_date}`;
@@ -370,10 +373,11 @@ async function editOwnSubmission(id) {
   if (!record?.can_edit) { showToast('该记录已截止或学期已归档'); return; }
   const returnState=captureEditReturn();
   closeReview();
-  if(!await beginResubmit(id)){restoreEditReturn(returnState);return;}
+  if(!await beginResubmit(id, {edit:true})){restoreEditReturn(returnState);return;}
   submissionEditReturnState=returnState;
   editingSubmission = Number(id);
   resubmitting = null;
+  $('.form-note span:last-child').textContent = '编辑原提交 · 不消耗补签券';
   $('#proofImage').required = false;
   $('.upload-box strong').textContent = '保留原截图，点击可更换';
   $('#proofHint').textContent = '未选择新图片时保留原截图';
