@@ -337,7 +337,10 @@ function setView(view, {preserveContent=false}={}) {
     if (shopView) window.CurrencyModule.renderShopView(shopView);
   }
   window.contestSchedule?.activate(view === 'contests');
-  if (previousView === 'extensions' && view !== 'extensions') window.PokerModule?.close();
+  if (previousView === 'extensions' && view !== 'extensions') {
+    window.PokerModule?.close();
+    window.RedPacketsModule?.close();
+  }
   if (view === 'extensions') window.ExtensionResources.load();
 }
 

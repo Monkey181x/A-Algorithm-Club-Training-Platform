@@ -11,6 +11,12 @@ from django.core.files.storage import default_storage
 from .services import build_weeks, cleanup_semester, settle_week, validate_week_dates
 
 
+@shared_task
+def expire_red_packets():
+    from .red_packet_services import settle_expired_packets
+    return {'refunded': settle_expired_packets()}
+
+
 @shared_task(soft_time_limit=115, time_limit=120)
 def send_astrbot_notifications():
     from .astrbot_notifications import deliver_pending, queue_weekly_reminders

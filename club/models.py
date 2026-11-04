@@ -409,6 +409,9 @@ class CurrencyTransaction(models.Model):
         ("report_penalty", "被举报扣除"),
         ("poker_buyin", "德州扑克买入"),
         ("poker_cashout", "德州扑克离桌结算"),
+        ("red_packet_sent", "发红包"),
+        ("red_packet_received", "领红包"),
+        ("red_packet_refund", "红包过期退回"),
     ]
 
     user = models.ForeignKey(User, null=True, on_delete=models.CASCADE, related_name="coin_transactions")
@@ -434,6 +437,57 @@ class CurrencyTransaction(models.Model):
 
     def __str__(self):
         return f"{self.user_id} {self.amount:+d} ({self.get_transaction_type_display()})"
+
+
+class RedPacket(models.Model):
+    """Coins are held here after sending, until claimed by team members."""
+    team = models.ForeignKey(Team, on_delete=models.PROTECT, related_name='red_packets')
+    sender = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name='sent_red_packets')
+    sender_member = models.ForeignKey(TeamMembership, null=True, on_delete=models.SET_NULL,
+                                      related_name='sent_red_packets')
+    request_id = models.UUIDField()
+    message = models.CharField(max_length=100, default='恭喜发财，大吉大利！')
+    kind = models.CharField(max_length=10, choices=[('random', '拼手气红包'), ('equal', '普通红包')])
+    total_amount = models.PositiveIntegerField()
+    total_count = models.PositiveIntegerField()
+    remaining_amount = models.PositiveIntegerField()
+    remaining_count = models.PositiveIntegerField()
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    refunded_at = models.DateTimeField(null=True, blank=True)
+    refunded_amount = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['sender', 'request_id'], name='unique_red_packet_request'),
+            models.CheckConstraint(condition=models.Q(total_count__gte=1)
+                & models.Q(total_amount__gte=models.F('total_count'), total_amount__lte=2147483647),
+                name='red_packet_valid_total'),
+            models.CheckConstraint(condition=models.Q(remaining_count__lte=models.F('total_count'))
+                & models.Q(remaining_amount__lte=models.F('total_amount'))
+                & (models.Q(remaining_count=0, remaining_amount=0)
+                   | models.Q(remaining_count__gt=0, remaining_amount__gte=models.F('remaining_count'))
+                   | models.Q(refunded_at__isnull=False, remaining_amount=0)),
+                name='red_packet_valid_remaining'),
+            models.CheckConstraint(condition=models.Q(refunded_at__isnull=True, refunded_amount=0)
+                | models.Q(refunded_at__isnull=False, refunded_amount__gt=0, remaining_amount=0,
+                    refunded_amount__lte=models.F('total_amount'), remaining_count__gt=0),
+                name='red_packet_valid_refund'),
+        ]
+        indexes = [models.Index(fields=['team', '-created_at', '-id'], name='red_packet_team_created')]
+
+
+class RedPacketClaim(models.Model):
+    packet = models.ForeignKey(RedPacket, on_delete=models.CASCADE, related_name='claims')
+    user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name='red_packet_claims')
+    member = models.ForeignKey(TeamMembership, null=True, on_delete=models.SET_NULL,
+                              related_name='red_packet_claims')
+    amount = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['packet', 'user'], name='unique_red_packet_claim')]
+        ordering = ['created_at', 'id']
 
 
 class CheckinRecord(models.Model):

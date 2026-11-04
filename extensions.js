@@ -10,11 +10,18 @@
   }
   async function load() {
     window.PokerModule?.close();
+    window.RedPacketsModule?.close();
     root.innerHTML = '<p role="status">正在加载资源…</p>';
     try {
       const result = await api('/api/extensions'); items = result.items;
       root.innerHTML = `<section class="page-heading"><div><p class="kicker">EXPLORE & LEARN</p><h1>拓展</h1></div>${result.can_manage ? '<button class="primary-button" id="extensionAdd">＋ 添加资源</button>' : ''}</section><div class="extension-wall"><button type="button" class="extension-tile poker-entry" id="pokerEntry"><span class="extension-placeholder" aria-hidden="true">♠</span><span class="extension-copy"><small>RBC POKER CLUB</small><strong>德州扑克</strong><span>多人联机 · 免费练习 · 人机对战</span></span></button>${items.map(item => `<article class="extension-tile"><a class="extension-link" href="${escape(item.href)}" ${item.kind === 'link' ? 'target="_blank" rel="noopener noreferrer"' : 'download'} aria-label="${escape(item.title)} · ${item.kind === 'file' ? '下载文件' : '打开链接'}">${item.cover ? `<img src="${escape(item.cover)}" alt="" loading="lazy">` : `<span class="extension-placeholder" aria-hidden="true">${item.kind === 'file' ? '↓' : '↗'}</span>`}<span class="extension-copy"><small>${item.kind === 'file' ? '↓ 文件下载' : '↗ 外部链接'}</small><strong>${escape(item.title)}</strong><span>${escape(item.description || '')}</span></span></a>${result.can_manage ? `<div class="extension-controls"><button data-edit="${item.id}">编辑</button><button data-delete="${item.id}">删除</button></div>` : ''}</article>`).join('')}</div>`;
       root.querySelector('#pokerEntry').onclick = () => window.PokerModule.open();
+      const entry = document.createElement('button');
+      entry.type = 'button';
+      entry.className = 'extension-tile red-packet-entry';
+      entry.innerHTML = '<span class="extension-placeholder" aria-hidden="true"><img class="rp-entry-icon" src="/static/red-packet.svg" alt=""></span><span class="extension-copy"><small>RBC RED PACKETS</small><strong>红包广场</strong><span>发 RBC Coins 红包 · 和队友分享好运</span></span>';
+      entry.onclick = () => window.RedPacketsModule.open();
+      root.querySelector('.extension-wall').prepend(entry);
       root.querySelector('#extensionAdd')?.addEventListener('click', () => editor());
       root.querySelectorAll('[data-edit]').forEach(button => button.onclick = () => editor(items.find(i => i.id === Number(button.dataset.edit))));
       root.querySelectorAll('[data-delete]').forEach(button => button.onclick = () => remove(items.find(i => i.id === Number(button.dataset.delete))));
