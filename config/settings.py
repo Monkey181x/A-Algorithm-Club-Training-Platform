@@ -116,6 +116,7 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {'priority_steps':list(range(10)), 'queue_orde
 from celery.schedules import crontab
 
 CELERY_BEAT_SCHEDULE = {
+    'red-packet-expiry': {'task': 'club.tasks.expire_red_packets', 'schedule': 60.0},
     'poker-room-timeouts': {'task': 'club.tasks.sweep_poker_rooms', 'schedule': 15.0},
 
     'sync-bound-accounts-nightly': {'task': 'club.tasks.sync_bound_accounts_nightly',

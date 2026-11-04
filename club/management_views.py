@@ -105,7 +105,7 @@ def delete_team_data(team):
     # Match scoring/archive lock order before deleting the related rows.
     list(Semester.objects.select_for_update().filter(team=team).order_by('pk'))
     list(TeamMembership.objects.select_for_update().filter(team=team).order_by('pk'))
-    from .models import ShopItem,ContestSubmission,Purchase,UserInventory
+    from .models import ShopItem,ContestSubmission,Purchase,UserInventory,RedPacket
     names = set(SubmissionPart.objects.filter(submission__team=team).exclude(upload='').values_list('upload', flat=True))
     for pending in CleanupJob.objects.filter(semester__team=team).values_list('pending_files', flat=True):
         names.update(pending)
@@ -118,6 +118,8 @@ def delete_team_data(team):
     # before their PROTECT references to shop items are collected.
     UserInventory.objects.filter(team=team).delete()
     Purchase.objects.filter(team=team).delete()
+    # Settled packets have no escrow; outstanding funds protect the team from deletion.
+    RedPacket.objects.filter(team=team, remaining_amount=0).delete()
     team.delete()
 
 
@@ -133,7 +135,7 @@ def delete_team(request, team_id):
     try:
         delete_team_data(team)
     except ProtectedError:
-        return api_error('团队仍有未结算的德州扑克座位，请先离桌结算后再删除团队', 409)
+        return api_error('团队仍有未结算的红包资金或德州扑克座位，请先完成结算后再删除团队', 409)
     if request.session.get('team_id') == team_id:
         request.session.pop('team_id', None)
     return JsonResponse({'ok': True})

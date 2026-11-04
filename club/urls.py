@@ -1,6 +1,7 @@
 from django.urls import path
 from . import poker_views
 from . import extension_views
+from . import red_packet_views
 from . import account_views, admin_submission_views
 from . import member_management
 from . import notification_views
@@ -20,6 +21,9 @@ from . import shop_fulfillment
 from . import app_views
 
 urlpatterns = [
+    path('red-packets', red_packet_views.packets),
+    path('red-packets/<int:packet_id>', red_packet_views.detail),
+    path('red-packets/<int:packet_id>/claim', red_packet_views.claim),
     path('poker/rooms', poker_views.rooms),
     path('poker/rooms/chips', poker_views.chips),
     path('poker/rooms/<uuid:room_id>', poker_views.room),
