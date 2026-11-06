@@ -1,0 +1,289 @@
+/* Follow native data-site-mode before JS runs; classes expose plugin state. */
+html:root[data-special-theme="djgun"],
+html:root[data-special-theme="djgun"].theme-djgun-light {
+  --card-bg: rgba(253,251,247,.7);
+  --text-main: #2b3a4a;
+  --text-secondary: #45566a;
+  --accent-color: #e6c577;
+  --theme-border: rgba(43,58,74,.22);
+  --control-bg: rgba(226,232,240,.5);
+  --solid-bg: #fdfbf7;
+  --selected-bg: #e9d9af;
+  --hover-bg: rgba(43,58,74,.08);
+  --wallpaper-dim: rgba(43,58,74,.22);
+}
+html:root[data-special-theme="djgun"][data-site-mode="dark"],
+html:root[data-special-theme="djgun"].theme-djgun-dark {
+  --card-bg: rgba(30,41,59,.75);
+  --text-main: #fdfbf7;
+  --text-secondary: #d1d9e4;
+  --accent-color: #ffd700;
+  --theme-border: rgba(255,255,255,.15);
+  --control-bg: rgba(51,65,85,.8);
+  --solid-bg: #1e293b;
+  --selected-bg: #475569;
+  --hover-bg: rgba(255,255,255,.1);
+  --wallpaper-dim: rgba(0,0,0,.5);
+}
+/* DJGun: scoped visual overrides; native layout is inherited. */
+html:root[data-special-theme="djgun"] {
+  --djgun-blue: #2b3a4a;
+  --djgun-cream: #fdfbf7;
+  --djgun-gold: #e6c577;
+  --djgun-surface: var(--card-bg);
+  --djgun-backdrop: none;
+  --site-text: var(--text-main) !important;
+  --site-secondary: var(--text-secondary) !important;
+  --site-subtle: var(--text-secondary) !important;
+  --site-border: var(--theme-border) !important;
+  --site-accent: var(--accent-color) !important;
+  --site-button-text: var(--djgun-blue) !important;
+  --site-fill: var(--control-bg) !important;
+  --site-selected: var(--selected-bg) !important;
+  --site-muted: var(--text-secondary) !important;
+  --site-surface: var(--djgun-surface) !important;
+  --site-elevated: var(--solid-bg) !important;
+}
+
+html:root[data-special-theme="djgun"] body::before {
+  background: linear-gradient(var(--wallpaper-dim),var(--wallpaper-dim)), url("assets/wallpaper.webp") center/cover !important;
+  background-attachment: fixed !important;
+}
+html:root[data-special-theme="djgun"] body :is([data-theme-block],#settingsView) {
+  --site-text: var(--text-main) !important;
+  --site-secondary: var(--text-secondary) !important;
+  --site-subtle: var(--text-secondary) !important;
+  --site-border: var(--theme-border) !important;
+  --site-accent: var(--accent-color) !important;
+  --site-button-text: var(--djgun-blue) !important;
+  --site-fill: var(--control-bg) !important;
+  --site-selected: var(--selected-bg) !important;
+  --site-muted: var(--text-secondary) !important;
+  --site-elevated: var(--solid-bg) !important;
+  --site-block-background: var(--djgun-surface) !important;
+  --site-block-blur: var(--djgun-backdrop) !important;
+  --site-avatar-background: var(--djgun-gold) !important;
+  --site-avatar-text: var(--djgun-blue) !important;
+  --settings-text: var(--text-main) !important;
+  --settings-secondary: var(--text-secondary) !important;
+  --settings-surface: var(--djgun-surface) !important;
+  --settings-card: var(--control-bg) !important;
+  --settings-line: var(--theme-border) !important;
+}
+
+html:root[data-special-theme="djgun"] body :is([data-theme-block],.sidebar,.topbar,.atlas-copy,.atlas-stage,.pulse-panel,.panel,.empty-state,.metric-card,.leaderboard-panel,.full-leaderboard,.my-submissions-live,.member-card,.contest-overview,.contest-browser,.contest-card,.tracker-browser,.currency-panel,.currency-summary,.workbench-panel,.extension-tile,.auth-card,.auth-story,.settings-group,.appearance-sample,.contest-empty,.review-content-block,.history-summary,.review-author,.problem-row,.checkin-card,.balance-card,.currency-card,.inventory-item,.checkin-calendar,.calendar-container,.shop-management,.swal2-popup,.feedback-card,.problem-detail,.solution-card,.solution-item,.contest-problem-tray,.tracker-summary>div,.workbench-scope,.workbench-team,.workbench-nav,.transaction-list,.currency-stat-card,.currency-balance-card,.personal-page,.personal-basics,.personal-platform-section,.platform-card,.team-management-dialog,.modal,.currency-modal,.modal-content,.contest-reward-summary,.poker-dialog,.blog-editor-modal):not(.shop-item-card) {
+  background-color: var(--djgun-surface) !important;
+  background-image: none !important;
+  color: var(--text-main) !important;
+  border-color: var(--theme-border) !important;
+  backdrop-filter: var(--djgun-backdrop) !important;
+  -webkit-backdrop-filter: var(--djgun-backdrop) !important;
+  transition: none !important;
+  opacity: 1 !important;
+  animation: none !important;
+}
+
+html:root[data-special-theme="djgun"] body .page-view.active {
+  opacity: 1 !important;
+}
+
+html:root[data-special-theme="djgun"] body #settingsView .settings-section {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html:root[data-special-theme="djgun"] body #settingsView .settings-group {
+  background: var(--djgun-surface) !important;
+  backdrop-filter: var(--djgun-backdrop) !important;
+  -webkit-backdrop-filter: var(--djgun-backdrop) !important;
+  transition: none !important;
+}
+
+html:root[data-special-theme="djgun"] body #showcaseView :is(.problem-toolbar,.problem-list,.submission-days) {
+  --site-block-background: transparent !important;
+  --site-block-blur: none !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html:root[data-special-theme="djgun"] body #dashboardView .training-activity .training-metrics .metric-card {
+  --site-block-background: transparent !important;
+  --site-block-blur: none !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: var(--theme-border) !important;
+}
+html:root[data-special-theme="djgun"] body :is(#settingsView,#showcaseView,#submissionsView,#rankingView,#membersView,#extensionsView,#rbcshopView) .page-heading :is(h1,h2,.kicker) {
+  color: var(--djgun-cream) !important;
+}
+html:root[data-special-theme="djgun"] body #showcaseView .queue-empty {
+  color: var(--djgun-cream) !important;
+  text-shadow: 0 1px 3px #2b3a4a, 0 0 6px #2b3a4a;
+}
+html:root[data-special-theme="djgun"] body #showcaseView #problemHeading { color: var(--djgun-cream) !important; }
+
+html:root[data-special-theme="djgun"] body .topbar .profile-chip :is(#openProfile,.currency-button,#logoutButton) {
+  color: var(--text-main) !important;
+  background: transparent !important;
+
+  transition: none !important;
+}
+html:root[data-special-theme="djgun"] body .topbar .profile-chip :is(#openProfile,.currency-button,#logoutButton):is(:hover,:focus-visible) {
+  color: var(--text-main) !important;
+  background: var(--hover-bg) !important;
+}
+
+html:root[data-special-theme="djgun"] body :is(#dashboardView,#mainSidebar,#settingsView,#membersView,#contestsView,#personalPage,#rbcshopView,[data-site-themed="true"]) :is(.nav-item,.segment,.text-button,.review-view,.history-view,.member-history-button,.problem-original-icon,.contest-original-link,.activity-record,.activity-record a,.activity-record-check,.team-button,.profile-chip,.contest-platform,.platform-monogram,.binding-count,.score-chip,.review-avatar,.member-balance-display,.currency-button,.member-action-button:not(.danger),.contest-card-bottom a,.platform-action-message,.settings-link,.settings-reset-role,.appearance-return,.theme-card-edit,.tracker-reward,.submission-language-tag,.problem-platform-badge,.problem-arrow,.current-week-tag,.solution-expand,.member-status,.platform-status,.account-state,.account-form-error,.shop-item-price,.currency-label,.settings-mode-tabs button) {
+  color: var(--text-main) !important;
+}
+html:root[data-special-theme="djgun"] body #dashboardView :is(#stageScore,#stageSubmissions,.stage-title,.stage-title span,.stage-header,.stage-caption,.stage-caption strong,.float-label,.stage-float,.stage-float small,.metric-label,.metric-value,.metric-note,.pulse-week span,.dashboard-platform-values strong) {
+  color: var(--text-main) !important;
+}
+html:root[data-special-theme="djgun"] body #dashboardView .training-activity .pulse-track :is(.pulse-week.is-selected,.pulse-week.is-current) span {
+  color: var(--text-main) !important;
+}
+
+html:root[data-special-theme="djgun"] body :is(.page-heading,#settingsView .settings-section-heading) :is(h1,h2,p,.kicker,.muted) {
+  color: var(--djgun-cream) !important;
+  text-shadow: 0 1px 3px #2b3a4a, 0 0 6px #2b3a4a;
+}
+html:root[data-special-theme="djgun"] body #showcaseView :is(.problem-toolbar label,#problemHeading) {
+  color: var(--djgun-cream) !important;
+  text-shadow: 0 1px 3px #2b3a4a, 0 0 6px #2b3a4a;
+}
+
+html:root[data-special-theme="djgun"] body :is(#settingsView,#membersView,#showcaseView,#submissionsView,#rbcshopView) :is(input,textarea,select) {
+  color: var(--text-main) !important;
+}
+html:root[data-special-theme="djgun"] body :is(#settingsView,#membersView,#showcaseView,#submissionsView,#rbcshopView) :is(input,textarea)::placeholder {
+  color: var(--text-secondary) !important;
+}
+
+html:root[data-special-theme="djgun"] .atlas-stage :is(.atlas-svg-layer,.stage-sheen,.stage-grid,.stage-path,.stage-orbit) { opacity: 0 !important; }
+html:root[data-special-theme="djgun"] .atlas-stage::before,
+html:root[data-special-theme="djgun"] .atlas-stage::after { opacity: 0 !important; }
+
+html:not([data-special-theme="djgun"]) .atlas-stage > .djgun-expression { display: none; }
+html:root[data-special-theme="djgun"] .atlas-stage > .djgun-expression {
+  display: block;
+  position: absolute;
+  width: 140px;
+  height: 140px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%,-50%);
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .4s ease-in-out;
+  z-index: -1;
+}
+html:root[data-special-theme="djgun"] .atlas-stage > .djgun-expression[data-visible="true"] { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  html:root[data-special-theme="djgun"] .atlas-stage > .djgun-expression { transition: none; }
+}
+
+html:root[data-special-theme="djgun"] body #settingsView {
+  --settings-bg: var(--control-bg) !important;
+}
+html:root[data-special-theme="djgun"] body #settingsView :is(.settings-group,.settings-mode-tabs,.settings-row,.settings-slider,.settings-color-row,.settings-swatches,.settings-wall-actions) :is(small,label,output,.settings-caption,.settings-alpha) {
+  color: var(--text-main) !important;
+}
+
+html:root[data-special-theme="djgun"] body #settingsView :is(#appearanceStatus,#contrastStatus,.settings-overline,.settings-section > .settings-caption) {
+  color: #fdfbf7 !important;
+  text-shadow: 0 1px 3px #2b3a4a, 0 0 6px #2b3a4a;
+}
+html:root[data-special-theme="djgun"] body .page-heading :is(small,.section-label,.page-description) {
+  color: #fdfbf7 !important;
+  text-shadow: 0 1px 3px #2b3a4a, 0 0 6px #2b3a4a;
+}
+
+html:root[data-special-theme="djgun"] body #rbcshopView .shop-item-icon[data-image-alt="DJGun" i] .shop-product-image {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: cover;
+}
+
+html:root[data-special-theme="djgun"] body #rbcshopView .shop-item-card .shop-item-info {
+  opacity: 1 !important;
+  filter: none !important;
+  background: var(--solid-bg) !important;
+}
+
+html:root[data-special-theme="djgun"] body #settingsView [data-special-key="djgun"] .theme-special-portrait img {
+  content: url("assets/icon-transparent.png");
+  mix-blend-mode: normal;
+}
+html:root[data-special-theme="djgun"] body #settingsView [data-special-key="djgun"] {
+  color: var(--text-main) !important;
+}
+
+html:root[data-special-theme="djgun"] body :is(#mainSidebar,.topbar,.page-view,#personalPage,.modal-backdrop,[data-site-themed="true"]) :is(.profile-avatar,.team-avatar,.leader-avatar,.member-avatar,.personal-avatar,.review-avatar):not(:has(img)) {
+  background: var(--djgun-gold) !important;
+  background-image: none !important;
+  color: #000 !important;
+  border-color: var(--theme-border) !important;
+}
+
+html:root[data-special-theme="djgun"] body #personalPage #personalAvatar:not(:has(img)) {
+  background: var(--djgun-gold) !important;
+  color: #000 !important;
+}
+
+html:root[data-special-theme="djgun"] body #dashboardView :is(.atlas-copy,.atlas-stage,.pulse-panel.training-activity) {
+  background: var(--djgun-surface) !important;
+  backdrop-filter: var(--djgun-backdrop) !important;
+  -webkit-backdrop-filter: var(--djgun-backdrop) !important;
+  transition: none !important;
+}
+html:root[data-special-theme="djgun"] body #dashboardView .training-activity .training-metrics .metric-card,
+html:root[data-special-theme="djgun"] body #dashboardView .stage-float,
+html:root[data-special-theme="djgun"] body .sidebar .menu-glass-surface {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Only colors interpolate. Panel opacity and backdrop never animate. */
+html:root[data-special-theme="djgun"] body :is([data-theme-block],.atlas-copy,.atlas-stage,.pulse-panel,.settings-group,.shop-item-info):not(.shop-item-card) {
+  transition: background-color .3s ease, color .3s ease, border-color .3s ease !important;
+}
+html:root[data-special-theme="djgun"][data-site-mode="dark"] .atlas-stage > .djgun-expression {
+  outline: 2px solid rgba(255,255,255,.2);
+}
+html:root[data-special-theme="djgun"][data-site-mode="dark"] body #showcaseView .queue-empty {
+  color: var(--text-main) !important;
+  background: var(--card-bg) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html:root[data-special-theme="djgun"] body :is([data-theme-block],.atlas-copy,.atlas-stage,.pulse-panel,.settings-group,.shop-item-info) { transition: none !important; }
+}
+
+/* Native selection indicators and their labels must use the same mode palette. */
+html:root[data-special-theme="djgun"] body #settingsView .settings-mode-tabs .settings-mode-indicator {
+  background: var(--selected-bg) !important;
+  border-color: var(--theme-border) !important;
+}
+html:root[data-special-theme="djgun"] body #settingsView .settings-mode-tabs button[aria-pressed="true"] {
+  color: var(--text-main) !important;
+}
+html:root[data-special-theme="djgun"] body #settingsView :is(select,.settings-hex,.settings-mode-tabs) {
+  background-color: var(--control-bg) !important;
+  color: var(--text-main) !important;
+}
+html:root[data-special-theme="djgun"] body :is(#settingsView,.page-view,#personalPage,.modal-backdrop) :is(select option,.ts-dropdown,.ts-dropdown .option) {
+  background-color: var(--solid-bg) !important;
+  color: var(--text-main) !important;
+}
+html:root[data-special-theme="djgun"] body :is(#settingsView,.page-view,#personalPage,.modal-backdrop) :is(.ts-dropdown .option.active,.ts-dropdown .option.selected,.submission-material-tabs button[aria-selected="true"]) {
+  background-color: var(--selected-bg) !important;
+  color: var(--text-main) !important;
+}
+html:root[data-special-theme="djgun"] body :is(#settingsView,.page-view,#personalPage,.modal-backdrop) :is(.primary-button,.shop-buy-btn:not(:disabled)) {
+  color: var(--djgun-blue) !important;
+}
