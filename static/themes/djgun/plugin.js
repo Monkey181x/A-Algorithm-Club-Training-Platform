@@ -1,4 +1,4 @@
-/* Optional decoration only. No API calls, settings writes or native node edits. */
+/* Scoped appearance state and optional ATLAS decoration. No settings or API writes. */
 (() => {
   'use strict';
   const root = document.documentElement;
@@ -20,7 +20,15 @@
     layers.forEach(image => image.remove());
     layers = [];
   }
+  function syncMode() {
+    const active = enabled();
+    const dark = root.dataset.siteMode === 'dark';
+    root.classList.toggle('theme-djgun', active);
+    root.classList.toggle('theme-djgun-light', active && !dark);
+    root.classList.toggle('theme-djgun-dark', active && dark);
+  }
   async function refresh() {
+    syncMode();
     // The native appearance engine rewrites these attributes on every paint.
     // Ignore equal values, otherwise adding our images could cause a repaint loop.
     const state = [root.dataset.specialTheme, root.dataset.siteMotion, reduced.matches].join('|');
@@ -62,8 +70,8 @@
   window.addEventListener('site-special-theme-change', refresh);
   reduced.addEventListener('change', refresh);
   new MutationObserver(records => {
-    if (records.some(record => ['data-special-theme', 'data-site-motion'].includes(record.attributeName))) refresh();
-  }).observe(root, {attributes: true, attributeFilter: ['data-special-theme', 'data-site-motion']});
+    if (records.some(record => ['data-special-theme', 'data-site-motion', 'data-site-mode'].includes(record.attributeName))) refresh();
+  }).observe(root, {attributes: true, attributeFilter: ['data-special-theme', 'data-site-motion', 'data-site-mode']});
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh, {once: true});
   else refresh();
 })();
