@@ -58,6 +58,10 @@ def profile(remote, binding):
 
 def history_page(remote, binding, state):
     platform, account = binding.platform, binding.account
+    if platform in {'codeforces','atcoder'} and 'evidence_until' not in state:
+        state = {**state, 'evidence_until': timezone.now().timestamp()}
+        if state.get('pages') or state.get('page', 1) > 1:
+            state['evidence_valid'] = False
     page = state.get('page', 1)
     rows, next_state = [], dict(state)
     next_state['page'] = page + 1
@@ -189,7 +193,6 @@ def history_page(remote, binding, state):
         evidence, valid=normalize(platform,account,submissions)
         next_state['_evidence_page']=evidence
         next_state['evidence_valid']=state.get('evidence_valid',True) and valid
-        next_state['evidence_until']=state.get('evidence_until',timezone.now().timestamp())
     signature = hashlib.sha256(json.dumps(ids,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     if ids and signature == state.get('signature'):
         raise SyncError('同步失败，请重试')

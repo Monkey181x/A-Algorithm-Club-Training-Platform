@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.utils import timezone
 from . import test_community as fixtures
 from .models import PlatformBinding,ContestParticipation,PlatformEvidenceCoverage,PlatformSubmissionEvidence
-from .submission_evidence import normalize,store_page,finish_coverage,contest_rows
+from .submission_evidence import normalize,store_page,finish_coverage,contest_rows,discovery_snapshot
 from .contest_progress_sources import hydrate
 
 class SubmissionEvidenceTests(TestCase):
@@ -36,6 +36,22 @@ class SubmissionEvidenceTests(TestCase):
             store_page(self.binding,rows)
         self.assertEqual(PlatformSubmissionEvidence.objects.count(),1)
         self.assertEqual(PlatformSubmissionEvidence.objects.get().verdict,'WA')
+
+    def test_resumed_scan_cannot_refresh_old_verdicts(self):
+        rows,_ = normalize('atcoder', 'reader', [self.row])
+        store_page(self.binding, rows)
+        scan = {'full': True, 'evidence_valid': True, 'evidence_until': self.now.timestamp()}
+        with patch('club.submission_evidence.timezone.now', return_value=self.now + timedelta(minutes=31)):
+            finish_coverage(self.binding, scan)
+        self.assertFalse(PlatformEvidenceCoverage.objects.exists())
+
+        finish_coverage(self.binding, scan)
+        self.assertEqual(len(contest_rows(self.contest)), 1)
+        later = self.now + timedelta(minutes=31)
+        PlatformEvidenceCoverage.objects.update(checked_at=later)
+        with patch('club.submission_evidence.timezone.now', return_value=later):
+            self.assertIsNone(contest_rows(self.contest))
+            self.assertEqual(discovery_snapshot(self.author.pk, 'atcoder', 'reader'), ([], None))
 
     def test_hydration_reuses_precise_ac_without_submission_request(self):
         rows,_=normalize('atcoder','reader',[self.row]);store_page(self.binding,rows)

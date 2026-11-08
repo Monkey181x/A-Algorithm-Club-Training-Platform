@@ -81,3 +81,50 @@ class RecoveryTests(SimpleTestCase):
             rows=discover(remote,'luogu','1')
         self.assertEqual([r['contest_key'] for r in rows],['1','2'])
         self.assertIn('expired cookie',rows.warning)
+
+    def test_luogu_scan_reserves_metadata_time_and_resumes_pending_work(self):
+        from django.core.cache.backends.locmem import LocMemCache
+        from .platform_sync import SyncError
+
+        remote = Mock(deadline=140, evidence_user_id=15)
+        checkpoint_cache = LocMemCache(self.id(), {})
+        self.addCleanup(checkpoint_cache.clear)
+        clock = 0
+        pages = []
+        metadata = []
+        def response(url, **kwargs):
+            nonlocal clock
+            if '/user/' in url:
+                return {'data': {'elo': [{'contest': {'id': 1}}]}}
+            if '/record/list?' in url:
+                page = int(url.rsplit('=', 1)[-1]); pages.append(page)
+                if len(pages) == 1:
+                    self.assertEqual(remote.deadline, 45)
+                    return {'data': {'records': {'result': [{'id': 1, 'user': {'uid': 9},
+                        'contest': {'id': 2}, 'submitTime': REWARD_START.timestamp() + 10}]}}}
+                if len(pages) == 2:
+                    clock = remote.deadline
+                    raise SyncError('等待请求额度超时')
+                return {'data': {'records': {'result': []}}}
+            key = url.rsplit('/', 1)[-1]; metadata.append(key)
+            self.assertEqual(remote.deadline, 140 if len(pages) == 2 else 200)
+            if key == '2' and len(pages) == 2:
+                raise SyncError('详情暂不可用')
+            return {'data': {'contest': {'name': key, 'startTime': 1, 'endTime': 2}}}
+
+        remote.json.side_effect = response
+        with patch('club.contest_progress_sources.configure_luogu', return_value='_uid=7; __client_id=test'), \
+             patch('club.platform_sync.luogu', return_value={'profile_url': 'https://www.luogu.com.cn/user/9'}), \
+             patch('club.contest_progress_sources.caches', {'platform_requests': checkpoint_cache}), \
+             patch('club.contest_progress_sources.time.monotonic', side_effect=lambda: clock), \
+             patch('club.contest_progress_sources.time.sleep'):
+            partial = discover(remote, 'luogu', '9')
+            self.assertEqual([row['contest_key'] for row in partial], ['1'])
+            self.assertTrue(partial.warning)
+            remote.deadline = 200
+            complete = discover(remote, 'luogu', '9')
+        self.assertEqual(pages, [1, 2, 2])
+        self.assertEqual(metadata, ['1', '2', '1', '2'])
+        self.assertEqual([row['contest_key'] for row in complete], ['1', '2'])
+        self.assertFalse(complete.warning)
+        self.assertIsNone(checkpoint_cache.get('luogu-discovery:v1:15:9'))

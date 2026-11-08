@@ -3,6 +3,9 @@ from datetime import datetime, timedelta, timezone as utc
 from django.utils import timezone
 from .models import PlatformBinding, PlatformSubmissionEvidence, PlatformEvidenceCoverage
 
+EVIDENCE_MAX_AGE = timedelta(minutes=30)
+INDEXING_LAG = timedelta(minutes=10)
+
 
 def normalize(platform, account, rows):
     from .platform_sync import SyncError
@@ -50,14 +53,28 @@ def store_page(binding, rows):
 
 def finish_coverage(binding,state):
     if not state.get('evidence_valid') or not state.get('evidence_until'): return
+    now = timezone.now()
+    observed_at = datetime.fromtimestamp(state['evidence_until'], utc.utc)
+    if observed_at < now - EVIDENCE_MAX_AGE:
+        return
     from .contest_rewards import REWARD_START
     start=max(REWARD_START.timestamp(), 0 if state.get('full') else max(0,state.get('cursor',0)-86400))
     # Allow indexing lag; the newest ten minutes never certify completeness.
-    end=state['evidence_until']-600
+    end=state['evidence_until']-INDEXING_LAG.total_seconds()
     if end<=start:return
     PlatformEvidenceCoverage.objects.update_or_create(binding=binding,account=binding.account.casefold(),
         starts_at=datetime.fromtimestamp(start,utc.utc),ends_at=datetime.fromtimestamp(end,utc.utc))
-    PlatformEvidenceCoverage.objects.filter(binding=binding,checked_at__lt=timezone.now()-timedelta(days=2)).delete()
+    PlatformEvidenceCoverage.objects.filter(binding=binding,checked_at__lt=now-timedelta(days=2)).delete()
+
+
+def fresh_coverage(binding):
+    cutoff = timezone.now() - EVIDENCE_MAX_AGE
+    # ends_at encodes the scan's original observation time, including for
+    # coverage written by older code that refreshed checked_at on completion.
+    return PlatformEvidenceCoverage.objects.filter(
+        binding=binding, account=binding.account.casefold(), checked_at__gte=cutoff,
+        ends_at__gte=cutoff - INDEXING_LAG,
+    )
 
 
 def contest_rows(contest):
@@ -66,9 +83,8 @@ def contest_rows(contest):
     binding=PlatformBinding.objects.filter(user_id=contest.user_id,platform=contest.platform,
         account=contest.account).first()
     if not binding:return None
-    covered=PlatformEvidenceCoverage.objects.filter(binding=binding,account=binding.account.casefold(),
-        starts_at__lte=contest.starts_at,ends_at__gte=contest.ends_at,
-        checked_at__gte=timezone.now()-timedelta(minutes=30)).exists()
+    covered=fresh_coverage(binding).filter(
+        starts_at__lte=contest.starts_at,ends_at__gte=contest.ends_at).exists()
     if not covered:return None
     rows=list(PlatformSubmissionEvidence.objects.filter(binding=binding,account=binding.account.casefold(),
         contest_key=contest.contest_key,submitted_at__gte=contest.starts_at,submitted_at__lt=contest.ends_at))
@@ -82,8 +98,7 @@ def discovery_snapshot(user_id,platform,account):
     if type(user_id) is not int:return [],None
     binding=PlatformBinding.objects.filter(user_id=user_id,platform=platform,account=account).first()
     if not binding:return [],None
-    coverage=PlatformEvidenceCoverage.objects.filter(binding=binding,account=account.casefold(),
-        starts_at__lte=REWARD_START,checked_at__gte=timezone.now()-timedelta(minutes=30)).order_by('-ends_at').first()
+    coverage=fresh_coverage(binding).filter(starts_at__lte=REWARD_START).order_by('-ends_at').first()
     if not coverage:return [],None
     rows=list(PlatformSubmissionEvidence.objects.filter(binding=binding,account=account.casefold(),
         submitted_at__gte=REWARD_START,submitted_at__lt=coverage.ends_at))
