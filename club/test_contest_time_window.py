@@ -140,6 +140,71 @@ class RecoveryTests(SimpleTestCase):
         self.assertEqual(pages[-1],101)
         self.assertNotIn('ranking_scan',c.source_data)
 
+    def test_leetcode_empty_rank_hint_checks_neighbors_and_resumes_failed_hint(self):
+        from django.core.cache.backends.locmem import LocMemCache
+        from .platform_sync import SyncError
+
+        contest = NS(platform='leetcode', account='reader', contest_key='weekly-contest-1',
+                     starts_at=REWARD_START, ends_at=REWARD_START+timedelta(hours=1),
+                     source_data={'rank': 26})
+        remote = Mock()
+        pages = []
+
+        def response(url, **kwargs):
+            if '/info/' in url:
+                return {'contest': {'start_time': REWARD_START.timestamp(), 'duration': 3600},
+                        'questions': [{'question_id': 1, 'title_slug': 'one', 'title': 'One'}]}
+            page = int(url.split('pagination=')[1].split('&')[0])
+            pages.append(page)
+            if page == 2:
+                return {'total_rank': [], 'submissions': []}
+            if pages.count(1) == 1:
+                raise SyncError('temporary failure')
+            return {'total_rank': [{'user_slug': 'reader', 'data_region': 'US'}],
+                    'submissions': [{'1': {'status': 10, 'date': REWARD_START.timestamp()}}]}
+
+        remote.json.side_effect = response
+        backend = LocMemCache(self.id(), {})
+        self.addCleanup(backend.clear)
+        with patch('club.contest_progress_sources.cache.get', return_value={}), \
+             patch('club.public_catalog.cache', backend):
+            with self.assertRaisesMessage(SyncError, 'temporary failure'):
+                hydrate(remote, contest)
+            self.assertEqual(contest.source_data['ranking_scan'], {'hint_pages': [1, 3]})
+            rows, error = hydrate(remote, contest)
+        self.assertEqual(pages, [2, 1, 1])
+        self.assertTrue(rows[0]['official_ac'])
+        self.assertFalse(error)
+        self.assertNotIn('ranking_scan', contest.source_data)
+
+    def test_leetcode_empty_hint_falls_back_to_sequential_eof(self):
+        from django.core.cache.backends.locmem import LocMemCache
+        from .contest_progress_sources import ContinueHydration, SyncError
+
+        contest = NS(platform='leetcode', account='reader', contest_key='weekly-contest-1',
+                     starts_at=REWARD_START, ends_at=REWARD_START+timedelta(hours=1),
+                     source_data={'rank': 126})
+        remote = Mock()
+        pages = []
+
+        def response(url, **kwargs):
+            if '/info/' in url:
+                return {'contest': {'start_time': REWARD_START.timestamp(), 'duration': 3600}}
+            pages.append(int(url.split('pagination=')[1].split('&')[0]))
+            return {'total_rank': [], 'submissions': []}
+
+        remote.json.side_effect = response
+        backend = LocMemCache(self.id(), {})
+        self.addCleanup(backend.clear)
+        with patch('club.public_catalog.cache', backend):
+            with self.assertRaises(ContinueHydration):
+                hydrate(remote, contest)
+            self.assertEqual(contest.source_data['ranking_scan'], {'next_page': 1})
+            with self.assertRaisesMessage(SyncError, '已查完正式榜单'):
+                hydrate(remote, contest)
+        self.assertEqual(pages, [6, 5, 7, 1])
+        self.assertNotIn('ranking_scan', contest.source_data)
+
     def test_luogu_failure_retains_both_discovery_sources(self):
         from .contest_progress_sources import SyncError
         remote=Mock();remote.json.side_effect=[{'data':{'elo':[{'contest':{'id':1}}]}},
@@ -194,7 +259,45 @@ class RecoveryTests(SimpleTestCase):
             remote.deadline = 200
             complete = discover(remote, 'luogu', '9')
         self.assertEqual(pages, [1, 2, 2])
-        self.assertEqual(metadata, ['1', '2', '1', '2'])
+        self.assertEqual(metadata, ['1', '2', '2'])
         self.assertEqual([row['contest_key'] for row in complete], ['1', '2'])
         self.assertFalse(complete.warning)
         self.assertIsNone(checkpoint_cache.get('luogu-discovery:v1:15:9'))
+
+    def test_luogu_rated_metadata_rotates_pending_keys_without_cookie(self):
+        from django.core.cache.backends.locmem import LocMemCache
+        from .platform_sync import SyncError
+
+        backend = LocMemCache(self.id(), {})
+        self.addCleanup(backend.clear)
+        remote = Mock(deadline=140, evidence_user_id=15)
+        clock = 0
+        metadata = []
+        rated_keys = [str(key) for key in range(100, 180)]
+
+        def response(url, **kwargs):
+            nonlocal clock
+            self.assertLess(clock, remote.deadline)
+            clock += 2
+            if '/user/' in url:
+                return {'data': {'elo': [{'contest': {'id': key}} for key in rated_keys]}}
+            key = url.rsplit('/', 1)[-1]
+            metadata.append(key)
+            if len(metadata) == 1:
+                raise SyncError('temporary failure')
+            return {'data': {'contest': {'name': key, 'startTime': 1, 'endTime': 2}}}
+
+        remote.json.side_effect = response
+        with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+             patch('club.platform_sync.luogu', return_value={'profile_url': 'https://www.luogu.com.cn/user/9'}), \
+             patch('club.contest_progress_sources.caches', {'platform_requests': backend}), \
+             patch('club.contest_progress_sources.time.monotonic', side_effect=lambda: clock):
+            first = discover(remote, 'luogu', '9')
+            self.assertTrue(first.warning)
+            clock = 0
+            second = discover(remote, 'luogu', '9')
+        self.assertEqual(metadata, [*rated_keys, rated_keys[0]])
+        self.assertEqual(len(first), 44)
+        self.assertCountEqual([row['contest_key'] for row in second], rated_keys)
+        self.assertFalse(second.warning)
+        self.assertIsNone(backend.get('luogu-discovery:v1:15:9'))

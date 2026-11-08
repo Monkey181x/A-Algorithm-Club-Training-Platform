@@ -46,6 +46,7 @@ _ATCODER_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
 _LUOGU_SCAN_PAGE_LIMIT = 15
 _LUOGU_SCAN_SECONDS = 45
 _LUOGU_METADATA_RESERVE_SECONDS = 45
+_LUOGU_METADATA_BATCH_SIZE = 45
 _LUOGU_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
 _NOWCODER_AC_PAGE_LIMIT = 15
 _NOWCODER_AC_SCAN_SECONDS = 45
@@ -300,47 +301,56 @@ def discover(remote, platform, account):
         profile = luogu(remote, account)
         data = remote.json(profile['profile_url'], headers={'x-lentille-request': 'content-only'})
         data = data.get('data', data.get('currentData', data))
-        result = []
         discovery_warning = ''
         rated_keys = {str((r.get('contest') or {}).get('id', '')) for r in data.get('elo', [])} - {''}
         keys = set(rated_keys)
         checkpoint = {'next_page': 1}
         checkpoint_cache = None
+        uid = profile['profile_url'].rstrip('/').rsplit('/', 1)[-1]
+        user_id = getattr(remote, 'evidence_user_id', None)
+        if type(user_id) is int:
+            checkpoint_cache = caches['platform_requests']
+            checkpoint_key = f'luogu-discovery:v1:{user_id}:{uid}'
+            checkpoint = checkpoint_cache.get(checkpoint_key) or checkpoint
         if cookie:
             from .contest_rewards import REWARD_START
-            uid = profile['profile_url'].rstrip('/').rsplit('/', 1)[-1]
-            user_id = getattr(remote, 'evidence_user_id', None)
-            if type(user_id) is int:
-                checkpoint_cache = caches['platform_requests']
-                checkpoint_key = f'luogu-discovery:v1:{user_id}:{uid}'
-                checkpoint = checkpoint_cache.get(checkpoint_key) or checkpoint
-                keys.update(checkpoint.get('pending_keys', ()))
             try:
                 if checkpoint['next_page'] is not None:
                     scan_luogu_records(remote, uid, cookie, REWARD_START.timestamp(), discovered=keys,
                                        checkpoint=checkpoint, reserve=_LUOGU_METADATA_RESERVE_SECONDS)
             except SyncError as exc:
                 discovery_warning = '提交记录获取不完整，已保留发现的比赛：' + str(exc)
-        pending_keys = set()
-        for key in sorted(keys, key=lambda key: (key not in rated_keys, key)):
+        checked_headers = checkpoint.get('checked_headers', {})
+        queued_keys = list(checkpoint.get('pending_keys', ()))
+        new_keys = keys - checked_headers.keys() - set(queued_keys)
+        queued_keys.extend(sorted(new_keys, key=lambda key: (key not in rated_keys, key)))
+        failed_keys = []
+        attempted = 0
+        deadline = getattr(remote, 'deadline', None)
+        for key in queued_keys[:_LUOGU_METADATA_BATCH_SIZE]:
+            if isinstance(deadline, (int, float)) and time.monotonic() >= deadline:
+                break
+            attempted += 1
             try:
                 d = remote.json('https://www.luogu.com.cn/contest/' + key, headers={'x-lentille-request':'content-only'})
             except SyncError:
-                pending_keys.add(key)
+                failed_keys.append(key)
                 continue
             c = d.get('data', d.get('currentData', d)).get('contest', {})
+            checked_headers[key] = None
             if c.get('startTime') and c.get('endTime'):
-                result.append(header(key, c['name'], 'https://www.luogu.com.cn/contest/' + key,
-                                     c['startTime'], c['endTime']))
+                checked_headers[key] = header(key, c['name'], 'https://www.luogu.com.cn/contest/' + key,
+                                              c['startTime'], c['endTime'])
+        pending_keys = queued_keys[attempted:] + failed_keys
         if pending_keys and not discovery_warning:
             discovery_warning = '部分洛谷比赛详情暂不可读取，已保留已取得的比赛'
         if checkpoint_cache is not None:
-            if checkpoint['next_page'] is not None or pending_keys:
-                checkpoint['pending_keys'] = sorted(pending_keys - rated_keys)
+            if pending_keys or (cookie and checkpoint['next_page'] is not None):
+                checkpoint.update(pending_keys=pending_keys, checked_headers=checked_headers)
                 checkpoint_cache.set(checkpoint_key, checkpoint, _LUOGU_DISCOVERY_CHECKPOINT_TTL)
             else:
                 checkpoint_cache.delete(checkpoint_key)
-        return DiscoveryRows(result, discovery_warning)
+        return DiscoveryRows([row.copy() for row in checked_headers.values() if row is not None], discovery_warning)
     raise SyncError('不支持此平台')
 
 
@@ -691,12 +701,15 @@ def hydrate(remote, contest):
         contest.ends_at=stamp(end)
         scan = contest.source_data.get('ranking_scan', {})
         rank = contest.source_data.get('rank')
-        target = max(1, math.ceil(int(rank)/25)) if rank else 1
+        hint_pages = scan.get('hint_pages', [])
+        if rank and not scan:
+            target = max(1, math.ceil(int(rank)/25))
+            hint_pages = list(dict.fromkeys([target, max(1, target-1), target+1]))
         next_page = int(scan.get('next_page', 1))
-        pages = list(dict.fromkeys([target, max(1,target-1), target+1])) if rank and not scan else list(range(next_page, next_page+10))
+        pages = hint_pages or range(next_page, next_page+10)
         accepted = None
-        for page in pages:
-            contest.source_data['ranking_scan'] = {'next_page': page}
+        for index, page in enumerate(pages):
+            contest.source_data['ranking_scan'] = {'hint_pages': hint_pages[index:]} if hint_pages else {'next_page': page}
             board = remote.json(host + f'/contest/api/ranking/{key}/?pagination={page}&region=global')
             if not isinstance(board.get('total_rank'), list) or not isinstance(board.get('submissions'), list):
                 raise SyncError('榜单暂不可读取，进度已保留，请重试')
@@ -706,13 +719,11 @@ def hydrate(remote, contest):
             if accepted is not None:
                 contest.source_data.pop('ranking_scan', None)
                 break
-            if not board['total_rank']:
+            if not board['total_rank'] and not hint_pages:
                 contest.source_data.pop('ranking_scan', None)
                 raise SyncError('已查完正式榜单，未找到账号记录')
-            contest.source_data['ranking_scan'] = {'next_page': page+1}
         if accepted is None:
-            if rank and not scan:
-                contest.source_data['ranking_scan'] = {'next_page': 1}
+            contest.source_data['ranking_scan'] = {'next_page': 1 if hint_pages else pages[-1]+1}
             raise ContinueHydration('榜单分批核验中')
         ratings = cache.get('lc-problem-ratings:v1')
         if ratings is None:
