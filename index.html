@@ -106,13 +106,13 @@
         <div class="page-view" id="contestsView">
           <section class="page-heading contest-heading">
             <div><p class="kicker">CONTEST CENTER</p><h1>赛事中心</h1></div>
-            <button class="secondary-button" id="contestRefresh" type="button">↻ 刷新日程</button>
+            <div class="contest-heading-actions"><button type="button" class="primary-button" id="contestClaimAll" hidden>一键领取奖励</button><button class="primary-button" id="contestRefresh" type="button">↻ 刷新日程</button></div>
           </section>
           <section class="contest-overview" aria-label="赛程概览">
             <div class="contest-stat-upcoming"><span>未来 7 天</span><strong id="contestWeekCount">—</strong><small>场即将开始</small></div>
             <div class="contest-stat-running"><span>正在进行</span><strong id="contestRunningCount">—</strong><small>场比赛</small></div>
             <div class="contest-next"><span>下一场比赛</span><strong id="contestNextName">正在获取赛程</strong><small id="contestNextTime">统一使用北京时间 · UTC+8</small></div>
-            <div class="contest-progress-actions"><button type="button" class="primary-button" id="contestSync">↻ 同步比赛进度</button><button type="button" class="primary-button" id="contestClaimAll" hidden>一键领取奖励</button><span id="contestProgressStatus" role="status"></span></div>
+            <div class="contest-progress-actions"><button type="button" class="primary-button" id="contestSync">↻ 同步比赛进度</button><span id="contestProgressStatus" role="status"></span></div>
           </section>
           <section class="panel contest-browser" aria-label="浏览比赛">
             <div class="contest-toolbar">

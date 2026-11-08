@@ -10,7 +10,7 @@
   mode.innerHTML = '<button type="button" class="segment active" data-center-mode="calendar" aria-pressed="true">赛事日程</button><button type="button" class="segment" data-center-mode="tracker" aria-pressed="false">补题 Tracker</button>';
   root.querySelector('.page-heading').after(mode);
   const panel = document.createElement('section'); panel.id = 'trackerPanel'; panel.hidden = true;
-  panel.innerHTML = `<div class="tracker-top"><div class="tracker-kind-tabs segmented" role="group" aria-label="Tracker 平台">${Object.entries(names).map(([key,name]) => `<button type="button" class="segment${key===kind?' active':''}" data-tracker-kind="${key}" aria-pressed="${key===kind}">${name}</button>`).join('')}</div><div class="tracker-actions"><button type="button" class="secondary-button" id="trackerRefresh">刷新目录</button><button type="button" class="primary-button" id="trackerSync">同步账号</button><button type="button" class="primary-button" id="trackerClaim" hidden>领取奖励</button></div></div>
+  panel.innerHTML = `<div class="tracker-top"><div class="tracker-kind-tabs segmented" role="group" aria-label="Tracker 平台">${Object.entries(names).map(([key,name]) => `<button type="button" class="segment${key===kind?' active':''}" data-tracker-kind="${key}" aria-pressed="${key===kind}">${name}</button>`).join('')}</div><div class="tracker-actions"><button type="button" class="primary-button" id="trackerRefresh">刷新目录</button><button type="button" class="primary-button" id="trackerSync">同步账号</button><button type="button" class="primary-button" id="trackerClaim" hidden>领取奖励</button></div></div>
     <div class="tracker-summary"><div><span>比赛</span><strong id="trackerContestCount">—</strong></div><div><span>已完成</span><strong id="trackerCompleted">—</strong></div><div><span>已 AC</span><strong id="trackerSolved">—</strong></div></div>
     <section class="panel tracker-browser"><div class="tracker-controls"><label class="tracker-search"><span class="sr-only">搜索比赛或题目</span><input id="trackerSearch" type="search" maxlength="100" placeholder="搜索比赛、题目…"></label><label>账号<select id="trackerAccount"><option value="">全部账号</option></select></label></div><div class="tracker-series-tabs segmented" role="group" aria-label="比赛类别">${['','ICPC','CCPC','省赛'].map(value=>`<button type="button" class="segment${value===''?' active':''}" data-tracker-series="${value}" aria-pressed="${value===''}">${value||'全部'}</button>`).join('')}</div>
     <div class="tracker-status-row"><p id="trackerStatus" role="status"></p><span id="trackerUpdated"></span></div><div id="trackerMatrix" class="tracker-matrix" tabindex="0" aria-label="比赛题目矩阵"></div><div class="tracker-pagination"><span id="trackerResultCount"></span><button type="button" class="secondary-button" id="trackerPrev">上一页</button><span id="trackerPage"></span><button type="button" class="secondary-button" id="trackerNext">下一页</button></div></section>`;
@@ -47,6 +47,7 @@
     select.innerHTML = `<option value="">${label}</option>` + values.map(value => `<option value="${escape(value.value ?? value)}">${escape(value.label ?? value)}</option>`).join('');
     select.value = current; select.dataset.signature = signature;
   }
+  const displayDifficulty = value => typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null;
   function color(problem) {
     if (problem.tier) return 'tier-'+problem.tier;
     const value = problem.difficulty;
@@ -71,7 +72,7 @@
     el('trackerStatus').textContent = data.error || failures.join('；') || (data.status==='pending' ? '正在更新目录…' : data.details_status==='pending' ? '正在更新题目…' : '');
     el('trackerUpdated').textContent = data.updated_at ? new Date(data.updated_at).toLocaleString('zh-CN') : '';
     const width = Math.max(1,...data.contests.map(c=>c.problems.length));
-    el('trackerMatrix').innerHTML = data.contests.length ? `<table><thead><tr><th scope="col">比赛</th>${Array.from({length:width},(_,i)=>`<th scope="col">${i+1}</th>`).join('')}</tr></thead><tbody>${data.contests.map(c=>`<tr><th scope="row"><a href="${escape(c.url)}" target="_blank" rel="noopener noreferrer">${escape(c.title)}</a><div><span>${escape([c.year,c.category,c.site].filter(Boolean).join(' · '))}</span><strong>${c.solved} / ${c.problems.length} AC</strong></div></th>${c.problems.map(p=>`<td><a class="tracker-problem ${color(p)}${p.accepted?' is-ac':''}" href="${escape(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="${escape(p.label+' '+p.title+(p.accepted?' 已 AC':''))}" title="${escape(p.title+(p.difficulty!=null?' · '+p.difficulty:'')+(p.difficulty_source?' · '+p.difficulty_source:''))}"><strong>${escape(p.label)}</strong><small>${p.accepted?'✓ AC':p.difficulty??({gold:'金',silver:'银',bronze:'铜',iron:'铁'}[p.tier] || '—')}</small></a>${p.reward?`<button type="button" class="tracker-reward" data-reward-key="${escape(p.claim_key)}" aria-label="领取 ${escape(p.label)} 的 ${p.reward} Coins">+${p.reward}</button>`:''}</td>`).join('')}${'<td></td>'.repeat(width-c.problems.length)}</tr>`).join('')}</tbody></table>` : `<div class="tracker-empty">${data.status==='pending'?'正在加载比赛…':data.status==='idle'?'点击“刷新目录”加载比赛':'暂无比赛'}</div>`;
+    el('trackerMatrix').innerHTML = data.contests.length ? `<table><thead><tr><th scope="col">比赛</th>${Array.from({length:width},(_,i)=>`<th scope="col">${i+1}</th>`).join('')}</tr></thead><tbody>${data.contests.map(c=>`<tr><th scope="row"><a href="${escape(c.url)}" target="_blank" rel="noopener noreferrer">${escape(c.title)}</a><div><span>${escape([c.year,c.category,c.site].filter(Boolean).join(' · '))}</span><strong>${c.solved} / ${c.problems.length} AC</strong></div></th>${c.problems.map(p=>`<td><a class="tracker-problem ${color(p)}${p.accepted?' is-ac':''}" href="${escape(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="${escape(p.label+' '+p.title+(p.accepted?' 已 AC':''))}" title="${escape(p.title+(displayDifficulty(p.difficulty)!=null?' · '+displayDifficulty(p.difficulty):'')+(p.difficulty_source?' · '+p.difficulty_source:''))}"><strong>${escape(p.label)}</strong><small>${p.accepted?'✓ AC':displayDifficulty(p.difficulty)??({gold:'金',silver:'银',bronze:'铜',iron:'铁'}[p.tier] || '—')}</small></a>${p.reward?`<button type="button" class="tracker-reward" data-reward-key="${escape(p.claim_key)}" aria-label="领取 ${escape(p.label)} 的 ${p.reward} Coins">+${p.reward}</button>`:''}</td>`).join('')}${'<td></td>'.repeat(width-c.problems.length)}</tr>`).join('')}</tbody></table>` : `<div class="tracker-empty">${data.status==='pending'?'正在加载比赛…':data.status==='idle'?'点击“刷新目录”加载比赛':'暂无比赛'}</div>`;
     page = data.page;
     el('trackerResultCount').textContent = `${data.total} 场比赛`;
     el('trackerPage').textContent = `${page} / ${data.pages}`;
@@ -125,6 +126,7 @@
     const version=generation;button.disabled=true;
     try {
       const result=await request('/api/profile/platform-rewards/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys,platform:{icpc:'qoj',codeforces:'codeforces',atcoder:'atcoder',nowcoder:'nowcoder'}[kind],...(el('trackerAccount').value?{account:Number(el('trackerAccount').value)}:{})})});
+      window.dispatchEvent(new CustomEvent('club:rewards-changed',{detail:{source:'tracker'}}));
       await window.CurrencyModule?.init();
       window.dispatchEvent(new Event('platform-rewards-updated'));
       window.showToast?.(`已领取 ${result.total} Coins`);
@@ -134,6 +136,7 @@
   el('trackerClaim').onclick=event=>claim(data.reward_keys,event.target);
   el('trackerMatrix').addEventListener('click',event=>{const button=event.target.closest('[data-reward-key]');if(button)claim([button.dataset.rewardKey],button);});
   window.contestTracker={activate(value){active=value;clearTimeout(timer);if(!value)generation++;if(value){syncTabs();if(selected)load();}}};
+  window.addEventListener('club:rewards-changed',event => {if(active && selected && event.detail?.source !== 'tracker') load();});
   new ResizeObserver(syncTabs).observe(panel);
   document.fonts?.ready.then(syncTabs);
   window.addEventListener('platform-accounts-updated',()=>{if(active&&selected)load();});

@@ -103,6 +103,7 @@
       event.target.disabled=true;
       try {
         const result=await request('/api/profile/platform-rewards/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:data.rewards.keys})});
+        window.dispatchEvent(new CustomEvent('club:rewards-changed',{detail:{source:'profile'}}));
         data=await request('/api/profile');renderBindings();
         await window.CurrencyModule?.init();message(`已领取 ${result.total} Coins`);
         window.dispatchEvent(new Event('platform-rewards-updated'));
@@ -179,6 +180,7 @@
     const credentialFields = platform === 'codeforces' ? `<label for="key-${key}">API Key<input id="key-${key}" type="password" name="api_key" autocomplete="off"></label><label for="secret-${key}">API Secret<input id="secret-${key}" type="password" name="api_secret" autocomplete="off"></label>` : ['nowcoder','leetcode','qoj'].includes(platform) ? `<label for="cookie-${key}">Cookie<input id="cookie-${key}" type="password" name="cookie" maxlength="16000" autocomplete="off"></label>` : '';
     card.innerHTML = `<div class="platform-card-head"><span class="platform-monogram" data-platform="${platform}">${escape(meta.short)}</span><div class="platform-card-identity"><h3>${escape(meta.name)}</h3><small>${escape(binding?.account || '添加账号')}</small></div><span class="platform-status ${busy ? 'pending' : binding?.status || ''}">${status}</span></div>
       ${binding ? metrics(binding) : ''}
+      ${binding?.sync_message ? `<p class="platform-updated" role="status">${escape(binding.sync_message)}</p>` : ''}
       ${binding?.error ? `<p class="platform-error" role="status">${escape(binding.error)}</p>` : ''}
       ${busy ? `<p class="platform-updated">已读取 ${number(binding.sync_progress?.count || 0)} 题</p>` : binding?.synced_at ? `<p class="platform-updated">${escape(new Date(binding.synced_at).toLocaleString('zh-CN'))}</p>` : ''}
       <form class="platform-bind-form"><label for="account-${key}">${escape(meta.hint)}</label><div><input id="account-${key}" name="account" required maxlength="100" value="${escape(binding?.account || '')}" autocomplete="off"><button class="secondary-button" type="submit" ${busy ? 'disabled' : ''}>${binding ? '更新绑定' : '添加'}</button></div>
@@ -254,6 +256,14 @@
       output.textContent = error.message; card.querySelectorAll('button').forEach(button => button.disabled = false);
     }
   }
+  window.addEventListener('club:rewards-changed',async event => {
+    if(!opened || event.detail?.source === 'profile') return;
+    const version=generation;
+    try {
+      const result=await request('/api/profile');
+      if(opened && version===generation){data.rewards=result.rewards;renderBindings();}
+    } catch(error){if(opened)message('奖励状态更新失败，请重新打开个人信息。',true);}
+  });
   function schedulePoll() {
     clearTimeout(poll);
     if (!opened || !data?.bindings.some(b => b.status === 'pending')) return;

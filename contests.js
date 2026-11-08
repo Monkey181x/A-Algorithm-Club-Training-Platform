@@ -176,14 +176,22 @@
     return j;
   }
   function progressControls() {
-    const count = progress.contests.reduce((n,c) => n+c.claimable_count,0);
-    el('contestClaimAll').hidden = count < 2;
-    el('contestClaimAll').textContent = `一键领取奖励（${count}）`;
+    const rewards = new Map();
+    for (const p of progress.contests.flatMap(c => c.problems).sort((a,b) => a.id-b.id)) {
+      const key = JSON.stringify(p.reward_key || [p.id]);
+      if (p.claimable && !rewards.has(key)) rewards.set(key,p.reward);
+    }
+    const total = [...rewards.values()].reduce((sum,value) => sum+value,0);
+    el('contestClaimAll').hidden = total <= 0;
+    el('contestClaimAll').disabled = claiming;
+    el('contestClaimAll').textContent = claiming ? '正在领取…' : `一键领取 · ${total} Coins`;
     document.querySelector('[data-contest-tab="attended"]').hidden = !progress.contests.length;
+    verifyLink.disabled = progress.status === 'pending';
     el('contestSync').disabled = progress.status === 'pending';
     el('contestSync').textContent = progress.status === 'pending' ? '正在同步…' : '↻ 同步比赛进度';
     el('contestProgressStatus').textContent = progress.status === 'pending' ? `正在核验比赛进度${progress.total ? ' '+(progress.total-progress.remaining)+' / '+progress.total : ''}…` : Object.entries(progress.messages || {}).map(([p,m]) => `${names[p] || "系统"}：${m}`).join('；');
     if (progress.status === 'failed') el('contestProgressStatus').textContent = Object.values(progress.messages || {}).join('；') || '本次同步超时或失败，已保留已有记录，请重试。';
+    if(progress.auto_checked_on) el('contestProgressStatus').textContent += ` · 最近自动检查：${progress.auto_checked_on}${progress.auto_finished_at ? ' 已完成（奖励需手动领取）' : ' 已启动'}`;
   }
   async function loadProgress() {
     clearTimeout(progressTimer);
@@ -194,6 +202,23 @@
       if (active && progress.status === 'pending') progressTimer = setTimeout(loadProgress,4000);
     } catch(error) {if(error.status===403){el('contestSync').hidden=true;el('contestClaimAll').hidden=true;el('contestProgressStatus').textContent='';}else el('contestProgressStatus').textContent=error.message;}
   }
+  let pendingContestUrl = '';
+  const verifyLink = document.createElement('button');
+  verifyLink.type = 'button'; verifyLink.textContent = '核验比赛链接';
+  verifyLink.className = el('contestSync').className;
+  el('contestSync').after(verifyLink);
+  verifyLink.addEventListener('click', async () => {
+    const url = window.prompt('输入官方比赛链接，核验原比赛时段内的 AC（QOJ 不适用）', pendingContestUrl);
+    if (!url?.trim()) return;
+    pendingContestUrl = url.trim();
+    verifyLink.disabled = true;
+    try {
+      await api('/api/contests/progress', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contest_url:pendingContestUrl})});
+      pendingContestUrl = '';
+      await loadProgress();
+    } catch (error) {el('contestProgressStatus').textContent=error.message;}
+    finally {verifyLink.disabled=progress.status === 'pending';}
+  });
   el('contestSync').addEventListener('click',async () => {
     el('contestSync').disabled = true;
     try {await api('/api/contests/progress',{method:'POST'});await loadProgress();}
@@ -213,10 +238,18 @@
     if(button&&!button.disabled) claim([Number(button.dataset.claim)],button);
   });
   async function claim(ids, button) {
-    if(claiming)return;claiming=true;el('contestClaimAll').disabled=true;
+    if(claiming)return;claiming=true;progressControls();
     if(button)button.disabled=true;
     try {
       const result=await api('/api/contests/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ids ? {ids} : {})});
+      const claimedIds = new Set(result.claims.map(p => p.id));
+      const claimedKeys = new Set(progress.contests.flatMap(c => c.problems).filter(p => claimedIds.has(p.id)).map(p => JSON.stringify(p.reward_key || [p.id])));
+      for (const contest of progress.contests) {
+        for (const p of contest.problems) if (claimedKeys.has(JSON.stringify(p.reward_key || [p.id]))) {p.claimed=true;p.claimable=false;}
+        contest.claimable_count=contest.problems.filter(p => p.claimable).length;
+      }
+      progressControls();
+      window.dispatchEvent(new CustomEvent('club:rewards-changed',{detail:{source:'contests'}}));
       if(button && result.total) {
         const float=document.createElement('span');float.className='coin-float';
         const icon=window.CurrencyModule?.getCurrencyData().currencyIcon || '/static/helloworld_coin.svg';
@@ -231,10 +264,11 @@
       }
       if(!result.total)el('contestProgressStatus').textContent='暂无可领取奖励，可能已经领取或核验条件已变化。';
       await window.CurrencyModule?.init();
-    }catch(error){el('contestProgressStatus').textContent=error.message;}
-    finally{claiming=false;el('contestClaimAll').disabled=false;await loadProgress();render();}
+    }catch(error){el('contestProgressStatus').textContent=error.message;window.showToast?.(error.message);}
+    finally{claiming=false;progressControls();await loadProgress();render();}
   }
   el('contestClaimAll').addEventListener('click',()=>claim());
+  window.addEventListener('club:rewards-changed',event => {if(active && event.detail?.source !== 'contests') loadProgress();});
 
   el('contestRefresh').addEventListener('click',() => load(true));
   el('contestSearch').addEventListener('input',() => {page=1;render();});

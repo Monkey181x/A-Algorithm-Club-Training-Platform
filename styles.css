@@ -896,3 +896,5 @@ html{-webkit-tap-highlight-color:transparent;}
 #showcaseView .problem-solutions>.solution-card{display:block;min-width:0;margin-bottom:0}
 @container(min-width:650px){#showcaseView .problem-solutions{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container(min-width:1140px){#showcaseView .problem-solutions{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.contest-heading-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px}.contest-heading-actions [hidden]{display:none!important}@media(max-width:760px){.contest-heading{flex-wrap:wrap}.contest-heading-actions{justify-content:flex-start}}
