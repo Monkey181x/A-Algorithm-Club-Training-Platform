@@ -27,6 +27,34 @@ class ContestSyncClosureTests(TransactionTestCase):
         self.proof=ContestProblemProgress.objects.create(participation=self.contest,problem_key='A',label='A',
             title='Verified proof',accepted=True,official_ac=True,accepted_at=timezone.now())
 
+    def test_page_continuation_is_persisted_before_requeue(self):
+        from .contest_progress_sources import ContinueHydration
+        def next_page(remote,c):
+            c.source_data['ranking_scan']={'next_page':11}
+            raise ContinueHydration('continue')
+        with patch('club.contest_progress_sources.hydrate',side_effect=next_page),patch('club.tasks.enqueue_hydration') as enqueue:
+            hydrate_contest_progress(self.contest.pk,self.token)
+        self.contest.refresh_from_db();self.state.refresh_from_db()
+        self.assertEqual(self.contest.source_data['ranking_scan']['next_page'],11)
+        self.assertNotEqual(str(self.contest.hydrated_token),self.token)
+        self.assertEqual(self.state.remaining,1)
+        enqueue.assert_called_once_with(self.contest.pk,self.token)
+        with patch('club.contest_progress_sources.hydrate',return_value=([],'')):
+            hydrate_contest_progress(self.contest.pk,self.token)
+        self.state.refresh_from_db()
+        self.assertEqual((self.state.remaining,self.state.status),(0,'ready'))
+
+    def test_manual_link_preserves_leetcode_rank_and_cursor(self):
+        self.binding.platform='leetcode';self.binding.save()
+        self.contest.platform='leetcode';self.contest.source_data={'rank':9999,'ranking_scan':{'next_page':101}};self.contest.save()
+        row={'contest_key':self.contest.contest_key,'title':'Same','url':'https://leetcode.com/contest/weekly-contest-1/',
+             'starts_at':self.contest.starts_at,'ends_at':self.contest.ends_at,'source_data':{'manual':True}}
+        with patch('club.contest_progress_sources.linked_contest',return_value=row),patch('club.tasks.enqueue_hydration'):
+            discover_contest_progress(self.author.pk,self.token,'https://leetcode.com/contest/weekly-contest-1/')
+        self.contest.refresh_from_db()
+        self.assertEqual(self.contest.source_data['rank'],9999)
+        self.assertEqual(self.contest.source_data['ranking_scan']['next_page'],101)
+
     def discovered_rows(self,*args):
         return [{'contest_key':'new-contest','title':'New contest','url':'https://codeforces.com/contest/999',
             'starts_at':timezone.now()-timedelta(hours=2),'ends_at':timezone.now(),

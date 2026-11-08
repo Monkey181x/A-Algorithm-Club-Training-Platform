@@ -14,37 +14,13 @@ from .reward_rules import group_for, amount_for, PLATFORMS, reward_groups
 from .views import api_login_required, api_error, body, membership_for
 
 
-def namespace(platform,account):
-    return ('leetcode_cn' if account.startswith('cn:') else 'leetcode_us') if platform=='leetcode' else platform
+from .ac_evidence import namespace, metadata, canonical, ACEvidence
 
 
-def metadata(platform):
-    kind='icpc' if platform=='qoj' else platform
-    catalog=TrackerCatalog.objects.filter(kind=kind).only('id','updated_at').first()
-    if not catalog:return {}
-    from django.core.cache import cache
-    key=f'platform-reward-metadata:{kind}:{catalog.updated_at}'
-    result=cache.get(key)
-    if result is not None:return result
-    result={}
-    for event in catalog.contests:
-        for p in event['problems']:
-            aliases=[p['key']]+p.get('aliases',[])
-            canonical=next((s for s in aliases if platform=='nowcoder' and s.startswith('problem/')),p['key'])
-            for alias in aliases:result[alias.lower()]={'key':canonical.lower(),'difficulty':p.get('difficulty')}
-    cache.set(key,result,900)
-    return result
-
-
-def canonical(platform,key,info=None):
-    info=metadata(platform) if info is None else info
-    return info.get(key.lower(),{}).get('key',key.lower())
-
-
-def contest_identity(problem):
+def contest_identity(problem, info=None):
     from .platform_solved import contest_key
     c=problem.participation
-    return namespace(c.platform,c.account),canonical(c.platform,contest_key(problem))
+    return namespace(c.platform,c.account),canonical(c.platform,contest_key(problem),info)
 
 
 def platform_claimed(problem,member):
@@ -60,8 +36,8 @@ def available_rewards(member,platform=None,binding_id=None):
     from .contest_rewards import REWARD_START
     if not member or not member.pk or member.user.is_superuser or not member.is_active or not member.team.currency_enabled:
         return {}
-    bindings=PlatformBinding.objects.filter(user_id=member.user_id)
-    if platform:bindings=bindings.filter(platform=platform)
+    evidence=ACEvidence([member.user_id], platform=platform)
+    bindings=evidence.bindings
     bound=list(bindings)
     enabled={b.platform for b in bound if any(amount_for(member.team,b.platform,g,0,'practice') or
         any(((member.team.reward_settings or {}).get(g,{}).get('practice_rewards',{}).get(b.platform,[])))
@@ -71,7 +47,7 @@ def available_rewards(member,platform=None,binding_id=None):
     if profile is None:return {}
     maps={p:metadata(p) for p in enabled}
     grouped={}
-    for record in PlatformSolvedRecord.objects.filter(binding__in=bindings,binding__platform__in=enabled).select_related('binding').order_by('pk'):
+    for record in evidence.records().filter(binding__platform__in=enabled).order_by('pk'):
         b=record.binding;key=canonical(b.platform,record.problem_key,maps[b.platform]);ns=namespace(b.platform,b.account)
         grouped.setdefault((ns,key),[]).append(record)
     paid=set();accounts_paid=set()

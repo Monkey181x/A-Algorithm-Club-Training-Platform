@@ -222,7 +222,7 @@ class AuditDifficultyTests(SimpleTestCase):
                'atcoder':[(399,1,1),(400,2,1),(800,2,2),(1000,3,2),(1600,3,3)],
                'nowcoder':[(1099,1,1),(1100,2,1),(1600,3,2),(2100,3,3)],
                'luogu':[(1,1,1),(2,2,1),(3,2,1),(4,3,2),(6,3,3)]}
-        team=SimpleNamespace(currency_enabled=True,problem_rewards={},pk=1)
+        team=SimpleNamespace(currency_enabled=True,reward_settings={},problem_rewards={},pk=1)
         member=SimpleNamespace(team=team,team_id=1)
         c=SimpleNamespace(source_data={},starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=2),detail_complete=True)
         p=SimpleNamespace(participation=c,accepted=True,official_ac=True,accepted_at=REWARD_START+timedelta(minutes=20))
@@ -243,15 +243,15 @@ class AuditDifficultyTests(SimpleTestCase):
             team.problem_rewards={'beginner':[]}
             self.assertEqual(reward_for(p,member,SimpleNamespace(grade=0,grade_date=date(2026,10,29)))[0],0)
 
-    def test_unknown_time_fallback_for_all_platforms_but_known_outside_stays_blocked(self):
+    def test_unknown_time_pending_for_all_platforms_but_known_outside_stays_blocked(self):
         c=SimpleNamespace(source_data={},starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=2),detail_complete=False)
-        member=SimpleNamespace(team=SimpleNamespace(currency_enabled=True,problem_rewards={}),team_id=1)
+        member=SimpleNamespace(team=SimpleNamespace(currency_enabled=True,reward_settings={},problem_rewards={}),team_id=1)
         profile=SimpleNamespace(grade=0,grade_date=date(2026,10,29))
         p=SimpleNamespace(participation=c,accepted=True,official_ac=False,accepted_at=None,difficulty=None)
         with patch('django.utils.timezone.now',return_value=REWARD_START+timedelta(days=1)):
             for platform in ['codeforces','atcoder','nowcoder','luogu','leetcode']:
                 c.platform=platform
-                self.assertEqual(reward_for(p,member,profile)[0],1)
+                self.assertEqual(reward_for(p,member,profile)[0],0)
                 p.accepted_at=c.ends_at;c.detail_complete=True
                 self.assertEqual(reward_for(p,member,profile)[0],0)
                 p.accepted_at=None;p.accepted=False

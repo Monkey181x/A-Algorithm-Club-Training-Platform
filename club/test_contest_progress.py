@@ -50,7 +50,16 @@ class ProgressTests(TestCase):
         self.team.problem_rewards={'beginner':[0,0,0],'experienced':[0,0,0]};self.team.save()
         self.assertEqual(reward_for(self.problem,self.member)[0],0)
 
-    def test_cutoff_known_outside_time_and_relaxed_unknown(self):
+    def test_link_rejected_during_pending_sync(self):
+        from django.utils import timezone
+        ContestSyncState.objects.create(user=self.user,status='pending',requested_at=timezone.now(),progressed_at=timezone.now())
+        self.client.force_login(self.user)
+        with patch('club.contest_progress_views.enqueue') as enqueue:
+            response=self.client.post('/api/contests/progress',data=json.dumps({'contest_url':'https://leetcode.cn/contest/weekly-contest-530/'}),content_type='application/json')
+        self.assertEqual(response.status_code,409)
+        enqueue.assert_not_called()
+
+    def test_cutoff_known_outside_time_and_pending_unknown(self):
         self.contest.starts_at=REWARD_START-timedelta(seconds=1)
         self.assertEqual(reward_for(self.problem,self.member)[0],0)
 
@@ -58,9 +67,9 @@ class ProgressTests(TestCase):
         self.problem.accepted_at=self.contest.ends_at
         self.assertEqual(reward_for(self.problem,self.member)[0],0)
         self.problem.accepted_at=None
-        self.assertEqual(reward_for(self.problem,self.member)[0],1)
+        self.assertEqual(reward_for(self.problem,self.member)[0],0)
         self.problem.difficulty=None
-        self.assertEqual(reward_for(self.problem,self.member)[0],1)
+        self.assertEqual(reward_for(self.problem,self.member)[0],0)
         self.problem.accepted=False
         self.assertEqual(reward_for(self.problem,self.member)[0],0)
 
@@ -147,7 +156,7 @@ class ProgressTests(TestCase):
         self.assertTrue(self.problem.accepted)
         self.assertTrue(self.contest.detail_complete)
         self.assertEqual(self.contest.sync_error,'访问受限')
-        self.assertEqual(state.status,'ready')
+        self.assertEqual(state.status,'failed')
 
 
 class WeeklyRewardTests(TestCase):

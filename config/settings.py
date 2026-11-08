@@ -116,6 +116,9 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {'priority_steps':list(range(10)), 'queue_orde
 from celery.schedules import crontab
 
 CELERY_BEAT_SCHEDULE = {
+    'contest-execution-recovery': {'task':'club.tasks.recover_contest_tasks','schedule':60.0},
+    'contest-check-nightly': {'task':'club.tasks.check_contests_nightly','schedule':crontab(hour=4, minute=0)},
+    'contest-check-recovery': {'task':'club.tasks.check_contests_nightly','schedule':300.0},
     'poker-room-timeouts': {'task': 'club.tasks.sweep_poker_rooms', 'schedule': 15.0},
 
     'sync-bound-accounts-nightly': {'task': 'club.tasks.sync_bound_accounts_nightly',

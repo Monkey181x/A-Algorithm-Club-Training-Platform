@@ -139,23 +139,52 @@ def _lock_contest_sync_state(user_id, token):
         user_id=user_id,token=token,status='pending').first()
 
 
+def finish_contest_sync(state):
+    state.status = 'failed' if state.has_errors else 'ready'
+    state.finished_at = timezone.now()
+    if state.auto_token == state.token:
+        state.auto_finished_at = None if state.has_errors else state.finished_at
+        state.auto_retry_at = (state.finished_at + timedelta(minutes=5 * max(1,state.auto_attempts))
+                               if state.has_errors and state.auto_attempts < 3 else None)
+
+
+def fail_contest_sync(user_id, token, message, *, stale_before=None):
+    """Fail only the current pending run, without resetting its daily budget."""
+    with transaction.atomic():
+        state = _lock_contest_sync_state(user_id, token)
+        if not state:
+            return
+        if stale_before is not None:
+            heartbeat = state.progressed_at or state.requested_at
+            if state.auto_token != state.token or not heartbeat or heartbeat >= stale_before:
+                return
+        state.has_errors = True
+        state.messages = {**state.messages, 'system': message}
+        finish_contest_sync(state)
+        state.save()
+
+
 @shared_task(soft_time_limit=750, time_limit=780)
-def discover_contest_progress(user_id, token):
+def discover_contest_progress(user_id, token, contest_url=None):
     from django.db import transaction
     from .models import ContestParticipation, PlatformBinding
-    from .contest_progress_sources import discover, Remote, SyncError
+    from .contest_progress_sources import discover, linked_contest, parse_contest_url, Remote, SyncError
     if not _contest_sync_is_current(user_id,token):
         return
     pending = []
     messages = {}
+    has_errors = False
     for binding in PlatformBinding.objects.filter(user_id=user_id):
         if not _contest_sync_is_current(user_id,token):
             return
+        if contest_url and binding.platform != parse_contest_url(contest_url)[0]:
+            continue
         if binding.platform == 'qoj':
             continue
         remote = Remote()
+        remote.evidence_user_id = user_id
         try:
-            rows = discover(remote, binding.platform, binding.account)
+            rows = [linked_contest(remote, contest_url, binding.account)] if contest_url else discover(remote, binding.platform, binding.account)
             with transaction.atomic():
                 state = _lock_contest_sync_state(user_id,token)
                 if not state:
@@ -165,11 +194,26 @@ def discover_contest_progress(user_id, token):
                 state.progressed_at=timezone.now();state.save(update_fields=['progressed_at'])
                 for row in rows:
                     key = row.pop('contest_key')
+                    if state.auto_token == state.token:
+                        from .contest_rewards import REWARD_START
+                        if row['ends_at'] > timezone.now() or row['starts_at'] < REWARD_START:
+                            continue
+                        if row['ends_at'] < timezone.now()-timedelta(days=7) and ContestParticipation.objects.filter(
+                                user_id=user_id,platform=binding.platform,account=binding.account,contest_key=key,
+                                detail_complete=True,sync_error='').exists():
+                            continue
+                    if binding.platform == 'leetcode':
+                        existing = ContestParticipation.objects.filter(user_id=user_id, platform=binding.platform,
+                            account=binding.account, contest_key=key).first()
+                        if existing:
+                            row['source_data'] = {**{k:v for k,v in existing.source_data.items() if k in ('rank','ranking_scan')}, **row.get('source_data', {})}
                     c, _ = ContestParticipation.objects.update_or_create(user_id=user_id, platform=binding.platform,
                         account=binding.account, contest_key=key, defaults=row)
                     pending.append(c.pk)
-            messages[binding.platform] = f'已获取 {len(rows)} 场参赛记录'
+            messages[binding.platform] = f'已获取 {len(rows)} 场参赛记录' + ('；'+rows.warning if getattr(rows, 'warning', '') else '')
+            has_errors = has_errors or bool(getattr(rows, 'warning', ''))
         except Exception as exc:
+            has_errors = True
             messages[binding.platform] = str(exc)[:240] if isinstance(exc, SyncError) else '比赛历史同步失败，保留已有记录'
         finally:
             remote.session.close()
@@ -179,7 +223,10 @@ def discover_contest_progress(user_id, token):
             return
         state.progressed_at=timezone.now()
         state.messages = messages; state.total = state.remaining = len(pending)
-        state.status = 'pending' if pending else 'ready'; state.finished_at = None if pending else timezone.now(); state.save()
+        state.has_errors = has_errors
+        state.status = 'pending'; state.finished_at = None
+        if not pending:finish_contest_sync(state)
+        state.save()
         for pk in pending:
             transaction.on_commit(lambda pk=pk: enqueue_hydration(pk, token))
 
@@ -191,26 +238,29 @@ def enqueue_hydration(contest_id, token):
         from .models import ContestSyncState,ContestParticipation
         contest=ContestParticipation.objects.filter(pk=contest_id).first()
         if contest:
-            ContestSyncState.objects.filter(user_id=contest.user_id,token=token).update(
-                status='failed',messages={'system':'比赛任务未能入队，请重新同步；已有进度已保留'})
+            fail_contest_sync(contest.user_id,token,'比赛任务未能入队；已有进度已保留')
 
 
 @shared_task(soft_time_limit=155, time_limit=165)
 def hydrate_contest_progress(contest_id, token):
     from django.db import transaction
     from .models import ContestParticipation, ContestProblemProgress, PlatformBinding
-    from .contest_progress_sources import hydrate, Remote, SyncError
+    from .contest_progress_sources import hydrate, Remote, SyncError, ContinueHydration
     c = ContestParticipation.objects.filter(pk=contest_id).first()
     if not c or str(c.hydrated_token)==str(token) or not _contest_sync_is_current(c.user_id,token):
         return
-    remote = Remote(); rows = None; error = ''
+    remote = Remote(); rows = None; error = ''; continuation = False
+    original_source = dict(c.source_data)
     try:
         rows, error = hydrate(remote, c)
+    except ContinueHydration as exc:
+        continuation = True; error = str(exc)
     except Exception as exc:
         error = str(exc)[:240] if isinstance(exc, SyncError) else '比赛题目或正式榜单暂不可读取，请稍后同步'
     finally:
         remote.session.close()
     verified_ends_at=c.ends_at
+    verified_source=c.source_data
     with transaction.atomic():
         state = _lock_contest_sync_state(c.user_id,token)
         if not state:
@@ -218,22 +268,36 @@ def hydrate_contest_progress(contest_id, token):
         c = ContestParticipation.objects.select_for_update().get(pk=c.pk)
         if str(c.hydrated_token) == str(token):
             return
+        if c.source_data != original_source:
+            return
+        c.source_data = verified_source
+        if continuation:
+            c.sync_error = error
+            c.save(update_fields=['source_data','sync_error'])
+            state.progressed_at=timezone.now(); state.save(update_fields=['progressed_at'])
+            transaction.on_commit(lambda: enqueue_hydration(c.pk, token))
+            return
         c.hydrated_token = token
-        c.save(update_fields=['hydrated_token'])
+        c.save(update_fields=['hydrated_token','source_data'])
         if PlatformBinding.objects.filter(user=c.user, platform=c.platform, account=c.account).exists():
             if rows is not None and (not error or not c.detail_complete):
                 c.ends_at=verified_ends_at
                 keys = [row['problem_key'] for row in rows]
                 for row in rows:
                     key = row.pop('problem_key')
-                    ContestProblemProgress.objects.update_or_create(participation=c, problem_key=key, defaults=row)
+                    progress, _ = ContestProblemProgress.objects.update_or_create(participation=c, problem_key=key, defaults=row)
+                    if not error:
+                        from .problem_difficulty import publish
+                        from .platform_solved import contest_key
+                        publish(c.platform, [dict(row, key=contest_key(progress))])
                 ContestProblemProgress.objects.filter(participation=c).exclude(problem_key__in=keys).delete()
                 c.detail_complete = not bool(error)
             c.sync_error = error; c.save()
         state.progressed_at=timezone.now()
         state.remaining = max(0, state.remaining-1)
+        state.has_errors = state.has_errors or bool(error)
         if not state.remaining:
-            state.status = 'ready'; state.finished_at = timezone.now()
+            finish_contest_sync(state)
         state.save()
 
 
@@ -319,6 +383,9 @@ def refresh_tracker_catalog(kind, token):
             if done:
                 current.status = 'ready';current.updated_at = timezone.now()
             current.save()
+            if kind != 'icpc' and state.get('phase') != 'enrich':
+                from .problem_difficulty import publish
+                publish(kind, [p for event in batch for p in event['problems']])
             if done and kind == 'icpc':
                 from .models import PlatformBinding
                 for binding_id in PlatformBinding.objects.filter(platform='qoj').exclude(encrypted_credentials='').values_list('id',flat=True):
@@ -428,14 +495,14 @@ def sync_bound_accounts_nightly(day=None):
             if not cursor.fetchone()[0]:
                 return {'status': 'busy'}
         pending = PlatformBinding.objects.filter(status='pending')
-        if pending.exists():
+        if pending.count() >= 3:
             transaction.on_commit(lambda: sync_bound_accounts_nightly.apply_async(
                 kwargs={'day': day}, countdown=30, priority=8))
             return {'status': 'waiting'}
         candidates = PlatformBinding.objects.filter(
             user__is_active=True,
             user_id__in=TeamMembership.objects.filter(is_active=True).values('user_id'),
-            status='ready').filter(Q(synced_at__isnull=True) | Q(synced_at__lt=now-timedelta(hours=12))).order_by('pk')
+            status='ready').exclude(user_id__in=pending.values('user_id')).filter(Q(synced_at__isnull=True) | Q(synced_at__lt=now-timedelta(hours=12))).order_by('pk')
         binding = None
         for candidate in candidates:
             if candidate.sync_state.get('auto_sync_day') == day:
@@ -453,6 +520,10 @@ def sync_bound_accounts_nightly(day=None):
             binding = current
             break
         if binding is None:
+            if pending.exists():
+                transaction.on_commit(lambda: sync_bound_accounts_nightly.apply_async(
+                    kwargs={'day': day}, countdown=30, priority=8))
+                return {'status': 'waiting'}
             return {'status': 'complete'}
         start(binding, False)
         binding.sync_state['auto_sync_day'] = day
@@ -460,3 +531,80 @@ def sync_bound_accounts_nightly(day=None):
         transaction.on_commit(lambda: sync_bound_accounts_nightly.apply_async(
             kwargs={'day': day}, countdown=30, priority=8))
         return {'status': 'started', 'binding_id': binding.pk}
+
+
+@shared_task(priority=8)
+def recover_contest_tasks():
+    from .contest_task_monitor import recover_interrupted
+    recovered = recover_interrupted()
+    if recovered:
+        check_contests_nightly.apply_async(priority=8)
+    return {'recovered':recovered}
+
+
+@shared_task(priority=8)
+def check_contests_nightly():
+    """Dispatch once per local day after 04:00; periodic ticks only catch missed work.
+
+    Never claims rewards. Durable markers and user/state locks coordinate with
+    manual sync and survive scheduler/worker restarts.
+    """
+    import uuid
+    from zoneinfo import ZoneInfo
+    from django.db import connection
+    from .models import PlatformBinding, TeamMembership, ContestSyncState
+    from .profile_views import lock_active_member
+    now=timezone.now()
+    local=now.astimezone(ZoneInfo('Asia/Shanghai'))
+    if local.hour < 4:
+        return {'status':'before_schedule'}
+    day=local.date()
+    # A stopped worker may have left a dispatched job without a heartbeat.
+    stale = ContestSyncState.objects.filter(status='pending',auto_checked_on=day).filter(
+        Q(progressed_at__lt=now-timedelta(minutes=30)) |
+        Q(progressed_at__isnull=True,requested_at__lt=now-timedelta(minutes=30))).values_list('user_id','token')
+    for uid, run_token in stale:
+        from .models import ContestTaskRun
+        # Published but not started is not an execution timeout.
+        if ContestTaskRun.objects.filter(sync__user_id=uid,token=run_token,status__in=['queued','reserved']).exists():
+            continue
+        fail_contest_sync(uid,run_token,'自动检查中断，已有进度已保留',stale_before=now-timedelta(minutes=30))
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT pg_try_advisory_xact_lock(%s)',[230042])
+            if not cursor.fetchone()[0]: return {'status':'busy'}
+        # Admit up to three user chains; a manual job blocks only its owner.
+        from django.db.models import F
+        active=ContestSyncState.objects.filter(status='pending').filter(
+            Q(progressed_at__gte=now-timedelta(minutes=30)) |
+            Q(progressed_at__isnull=True,requested_at__gte=now-timedelta(minutes=30)) |
+            Q(task_runs__token=F('token'),task_runs__status__in=['queued','reserved'])).distinct()
+        if active.count() >= 3:
+            return {'status':'waiting'}
+        active_users=list(active.values_list('user_id',flat=True))
+        retryable = Q(status='failed',auto_attempts__lt=3,auto_retry_at__lte=now)
+        checked=ContestSyncState.objects.filter(auto_checked_on=day).exclude(retryable).values('user_id')
+        users=PlatformBinding.objects.filter(user__is_active=True,user__is_superuser=False,
+            platform__in=['codeforces','atcoder','nowcoder','luogu','leetcode'],
+            user_id__in=TeamMembership.objects.filter(is_active=True).values('user_id')).exclude(user_id__in=checked).exclude(user_id__in=active_users).values_list('user_id',flat=True).distinct().order_by('user_id')
+        for uid in users:
+            member_id=TeamMembership.objects.filter(user_id=uid,is_active=True).values_list('pk',flat=True).first()
+            if not member_id or not lock_active_member(uid,member_id): continue
+            state,_=ContestSyncState.objects.get_or_create(user_id=uid)
+            state=ContestSyncState.objects.select_for_update().get(pk=state.pk)
+            if state.auto_checked_on == day and not (state.status == 'failed' and state.auto_attempts < 3 and state.auto_retry_at and state.auto_retry_at <= now): continue
+            if state.status=='pending' and (state.progressed_at or state.requested_at or now) >= now-timedelta(minutes=30): continue
+            state.auto_attempts = state.auto_attempts + 1 if state.auto_checked_on == day else 1
+            state.has_errors=False;state.auto_retry_at=None
+            state.token=uuid.uuid4();state.auto_token=state.token;state.auto_checked_on=day;state.auto_finished_at=None
+            state.status='pending';state.requested_at=state.progressed_at=now;state.finished_at=None
+            state.messages={};state.remaining=state.total=0;state.save()
+            token=str(state.token)
+            def dispatch(user_id=uid, run_token=token):
+                try: discover_contest_progress.apply_async(args=[user_id,run_token],priority=8)
+                except Exception:
+                    fail_contest_sync(user_id,run_token,'自动检查未能入队，已有进度已保留')
+            transaction.on_commit(dispatch)
+            transaction.on_commit(lambda: check_contests_nightly.apply_async(countdown=30,priority=8))
+            return {'status':'started','user_id':uid}
+    return {'status':'waiting' if active_users else 'complete'}

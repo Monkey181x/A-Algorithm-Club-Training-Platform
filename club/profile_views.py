@@ -34,7 +34,25 @@ def serialize_binding(binding):
         baseline=binding.solved_baseline
     except PlatformSolvedBaseline.DoesNotExist:
         baseline=None
+    state=binding.sync_state or {}
+    count=state.get('count',0)
+    complete=state.get('phase') == 'done' and state.get('complete') is True
+    coverage='complete' if complete else 'partial' if count or baseline else 'unknown'
+    if expired or binding.status == 'failed':
+        message='同步未完成，已有数据已保留，可继续同步'
+    elif state.get('retry_at') and pending:
+        message='已保留分页进度，等待自动重试'
+    elif pending:
+        message='正在同步，已获取的数据可先使用'
+    elif coverage == 'complete':
+        message='历史题目列表已完整同步；未知日期不计入热力图'
+    elif coverage == 'partial':
+        message='仅获取到部分题目明细；完整过题数以平台统计为参考'
+    else:
+        message='尚未获得可靠题目明细'
     return {
+        'coverage': coverage, 'sync_message': message,
+        'retry_at': state.get('retry_at') if pending else None,
         'id': binding.pk,
         'has_credentials': bool(binding.encrypted_credentials),
         'sync_progress': {'pages': binding.sync_state.get('pages', 0), 'count': binding.sync_state.get('count', 0)},

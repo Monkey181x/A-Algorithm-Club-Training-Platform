@@ -126,7 +126,7 @@ class ProfileTests(TestCase):
         self.client.force_login(self.user)
         self.assertEqual(self.client.delete('/api/profile/platforms/codeforces').status_code,200)
         self.assertFalse(PlatformBinding.objects.filter(pk=binding.pk).exists())
-        for platform,account in [('qoj','test'),('hdu','test'),('codeforces','https://evil.invalid'),('nowcoder','name')]:
+        for platform,account in [('hdu','test'),('codeforces','https://evil.invalid'),('nowcoder','name')]:
             self.assertEqual(self.put(platform,account).status_code,400)
 
     @patch('club.platform_sync.fetch_snapshot')

@@ -2,7 +2,7 @@
 import hashlib
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from urllib.parse import quote, unquote, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -184,6 +184,12 @@ def history_page(remote, binding, state):
             done=True; complete=False
     else:
         raise SyncError('不支持的平台')
+    if platform in {'codeforces','atcoder'}:
+        from .submission_evidence import normalize
+        evidence, valid=normalize(platform,account,submissions)
+        next_state['_evidence_page']=evidence
+        next_state['evidence_valid']=state.get('evidence_valid',True) and valid
+        next_state['evidence_until']=state.get('evidence_until',timezone.now().timestamp())
     signature = hashlib.sha256(json.dumps(ids,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     if ids and signature == state.get('signature'):
         raise SyncError('同步失败，请重试')
@@ -267,7 +273,12 @@ def run_step(binding_id,token):
                     current.account=canonical
                 # Preserve last successful fields when an optional profile field is absent.
                 current.snapshot=dict(current.snapshot,**result)
+            if current.platform in {'codeforces','atcoder'} and '_evidence_page' in state:
+                from .submission_evidence import store_page, finish_coverage
+                store_page(current,state.pop('_evidence_page'))
+                if done: finish_coverage(current,state)
             store(current,rows)
+            state.pop('retries', None); state.pop('retry_at', None)
             state['count']=current.solved_records.count()
             if done:
                 state.update(phase='done',cursor=max(state.get('cursor',0),state.get('max_stamp',0)))
@@ -294,6 +305,25 @@ def run_step(binding_id,token):
                 transaction.on_commit(lambda: sync_platform_binding.apply_async(args=[binding_id,token],countdown=1))
     except Exception as exc:
         message=str(exc)[:240] if isinstance(exc,SyncError) else '同步失败，请重试'
-        PlatformBinding.objects.filter(pk=binding_id,sync_token=token,sync_state=expected).update(status='failed',error=message)
+        with transaction.atomic():
+            current=PlatformBinding.objects.select_for_update().filter(pk=binding_id,sync_token=token,status='pending',sync_state=expected).first()
+            if current:
+                attempts=expected.get('retries',0)
+                from .platform_limits import retryable
+                if attempts < 3 and retryable(exc):
+                    delay=15 * 2**attempts
+                    current.sync_state=dict(expected,retries=attempts+1,retry_at=(timezone.now()+timedelta(seconds=delay)).isoformat())
+                    current.requested_at=timezone.now()
+                    current.error='同步暂未完成，已保留数据，将自动重试：'+message
+                    current.save(update_fields=['sync_state','requested_at','error'])
+                    def retry():
+                        from .tasks import sync_platform_binding
+                        try: sync_platform_binding.apply_async(args=[binding_id,token],countdown=delay)
+                        except Exception:
+                            PlatformBinding.objects.filter(pk=binding_id,sync_token=token,status='pending').update(status='failed',error='重试任务未能入队，已保留数据，请手动重试')
+                    transaction.on_commit(retry)
+                else:
+                    current.status='failed';current.error=('自动重试未成功，已保留数据和进度，请重试：' if retryable(exc) else '需检查账号或凭据，已保留数据和进度：')+message
+                    current.save(update_fields=['status','error'])
     finally:
         remote.session.close()

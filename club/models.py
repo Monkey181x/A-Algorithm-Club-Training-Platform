@@ -753,6 +753,30 @@ class PlatformSolvedRecord(models.Model):
         constraints = [models.UniqueConstraint(fields=['binding', 'problem_key'], name='unique_binding_solved_problem')]
 
 
+class PlatformSubmissionEvidence(models.Model):
+    binding = models.ForeignKey(PlatformBinding, on_delete=models.CASCADE, related_name='submission_evidence')
+    account = models.CharField(max_length=100)
+    submission_id = models.CharField(max_length=100)
+    problem_key = models.CharField(max_length=200)
+    contest_key = models.CharField(max_length=100, blank=True)
+    submitted_at = models.DateTimeField()
+    verdict = models.CharField(max_length=40)
+    source = models.CharField(max_length=40)
+    observed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['binding','account','submission_id'], name='unique_submission_evidence')]
+        indexes = [models.Index(fields=['binding','contest_key','submitted_at'], name='evidence_contest_time')]
+
+
+class PlatformEvidenceCoverage(models.Model):
+    binding = models.ForeignKey(PlatformBinding, on_delete=models.CASCADE, related_name='evidence_coverage')
+    account = models.CharField(max_length=100)
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    checked_at = models.DateTimeField(auto_now=True)
+
+
 class TrackerCatalog(models.Model):
     kind = models.CharField(max_length=20, unique=True)
     contests = models.JSONField(default=list)
@@ -822,6 +846,13 @@ class WeeklyStreakGrant(models.Model):
 
 
 class ContestSyncState(models.Model):
+    has_errors = models.BooleanField(default=False)
+    auto_attempts = models.PositiveSmallIntegerField(default=0)
+    auto_retry_at = models.DateTimeField(null=True, blank=True)
+
+    auto_checked_on = models.DateField(null=True, blank=True)
+    auto_token = models.UUIDField(null=True, blank=True)
+    auto_finished_at = models.DateTimeField(null=True, blank=True)
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     token = models.UUIDField(default=uuid.uuid4)
     status = models.CharField(max_length=16, default='idle')
@@ -831,6 +862,20 @@ class ContestSyncState(models.Model):
     messages = models.JSONField(default=dict)
     remaining = models.PositiveIntegerField(default=0)
     total = models.PositiveIntegerField(default=0)
+
+
+class ContestTaskRun(models.Model):
+    task_id = models.CharField(max_length=100, primary_key=True)
+    sync = models.ForeignKey(ContestSyncState, on_delete=models.CASCADE, related_name='task_runs')
+    token = models.UUIDField()
+    task_name = models.CharField(max_length=100)
+    status = models.CharField(max_length=16, default='queued', db_index=True)
+    worker_epoch = models.CharField(max_length=100, blank=True)
+    queued_at = models.DateTimeField(default=timezone.now)
+    started_at = models.DateTimeField(null=True)
+    heartbeat_at = models.DateTimeField(null=True)
+    missing_since = models.DateTimeField(null=True)
+    finished_at = models.DateTimeField(null=True)
 
 
 class ContestParticipation(models.Model):
@@ -927,6 +972,17 @@ class PokerRoom(models.Model):
     closed = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class SharedProblemDifficulty(models.Model):
+    platform = models.CharField(max_length=20)
+    problem_key = models.CharField(max_length=200)
+    value = models.FloatField(null=True)
+    source = models.CharField(max_length=100, blank=True)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['platform', 'problem_key'], name='unique_shared_problem_difficulty')]
 
 
 class PokerSeat(models.Model):
