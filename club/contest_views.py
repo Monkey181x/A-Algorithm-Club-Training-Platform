@@ -37,6 +37,11 @@ def read_calendar_response(response, limit=4 * 1024 * 1024):
 
 
 def fetch_text(url, limit=4 * 1024 * 1024):
+    from .public_catalog import calendar_text
+    return calendar_text(url, lambda: _fetch_text(url, limit))
+
+
+def _fetch_text(url, limit):
     req = Request(url, headers={'User-Agent': 'Mozilla/5.0 ClubContestCalendar/1.0', 'Accept': '*/*'})
     with build_opener(NoRedirect()).open(req, timeout=10) as response:
         return read_calendar_response(response, limit)

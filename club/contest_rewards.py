@@ -22,7 +22,7 @@ def difficulty_value(value):
     return value if type(value) in (int,float) and math.isfinite(value) and value >= 0 else None
 
 
-def reward_for(problem, member, profile=None):
+def reward_for(problem, member, profile=None, *, difficulty_info=None):
     contest = problem.participation
     if contest.source_data.get('demo') is True:
         return 0, '', '演示记录不参与奖励'
@@ -44,19 +44,14 @@ def reward_for(problem, member, profile=None):
         return 0, '', '2026-11-01 前的比赛不发放奖励'
     if contest.starts_at > now:
         return 0, '', '比赛尚未开始'
-    timing_unknown = problem.accepted and problem.accepted_at is None
-    if not contest.detail_complete and not timing_unknown:
-        return 0, '', '比赛进度尚未完整核验'
     if not problem.accepted:
         return 0, '', '尚无可靠 AC 记录'
-    if problem.accepted_at is not None and problem.accepted_at < REWARD_START:
-        return 0, '', '2026-11-01 前的 AC 不发放奖励'
-    # User policy: a proven AC with an unavailable timestamp is eligible.
-    # Known non-contest/out-of-window timestamps never take this fallback.
-    if problem.accepted_at is not None and not problem.official_ac:
-        return 0, '', '已知通过记录不属于正式比赛'
-    if problem.accepted_at is not None and (not contest.starts_at <= problem.accepted_at < contest.ends_at or problem.accepted_at > now):
-        return 0, '', '通过时间不在正式比赛时段内'
+    if problem.accepted_at is None:
+        return 0, '', 'AC 提交时间待核验'
+    if not contest.detail_complete:
+        return 0, '', '比赛进度尚未完整核验'
+    if not contest.starts_at <= problem.accepted_at < contest.ends_at or problem.accepted_at > now:
+        return 0, '', '提交时间不在原比赛时段内'
     profile = profile or UserProfile.objects.filter(user=member.user).first()
     level = grade_on(profile, timezone.localtime(contest.starts_at).date())
     if level is None:
@@ -64,7 +59,8 @@ def reward_for(problem, member, profile=None):
     from .reward_rules import amount_for, group_for
     day=timezone.localtime(contest.starts_at).date()
     group=group_for(None,day,profile)
-    amount = amount_for(member.team,contest.platform,group,problem.difficulty,day=day,level=level)
+    from .problem_difficulty import for_problem
+    amount = amount_for(member.team,contest.platform,group,(difficulty_info or for_problem(problem))['difficulty'],day=day,level=level)
     return amount, group, '' if amount else '当前档位奖励为 0'
 
 
@@ -80,17 +76,22 @@ def claimed(problem, member):
 def serialize_participation(contest, member, context=None):
     bound = ((contest.platform, contest.account) in context['bindings']) if context is not None else PlatformBinding.objects.filter(user=member.user, platform=contest.platform, account=contest.account).exists()
     rows = []
+    from .reward_snapshot import RewardSnapshot
+    if context is None:context = {}
+    if 'reward_snapshot' not in context:context['reward_snapshot'] = RewardSnapshot(member)
+    snapshot = context['reward_snapshot']
+    info = snapshot.info(contest.platform)
     for p in contest.problems.all():
-        amount, group, reason = reward_for(p, member, context['profile'] if context else None)
-        taken = ((contest.platform, contest.contest_key, p.problem_key) in context['member_claims'] or (contest.platform, contest.account.casefold(), contest.contest_key, p.problem_key) in context['account_claims']) if context else claimed(p, member)
-        if context and not taken:
-            from .platform_rewards import platform_claimed
-            taken=platform_claimed(p,member)
+        from .problem_difficulty import for_problem
+        difficulty_info = for_problem(p, info)
+        reward_identity = snapshot.identity(p)
+        amount, group, reason = reward_for(p, member, context.get('profile'), difficulty_info=difficulty_info)
+        taken = snapshot.claimed(p)
         if not bound:
             reason = '当前未绑定该参赛账号'
         rows.append({'id': p.pk, 'label': p.label, 'title': p.title, 'url': p.url,
-            'accepted': p.accepted, 'official_ac': p.official_ac, 'timing_relaxed': bool(p.accepted and p.accepted_at is None), 'difficulty': difficulty_value(p.difficulty),
-            'difficulty_source': p.difficulty_source, 'reward': amount, 'claimed': taken,
+            'accepted': p.accepted, 'official_ac': p.official_ac, 'timing_relaxed': bool(contest.platform == 'qoj' and p.accepted and p.accepted_at is None), **difficulty_info,
+            'reward': amount, 'claimed': taken, 'reward_key': list(reward_identity),
             'claimable': bool(amount and not taken and bound and not reason), 'reason': reason})
     return {'id': 'participation-' + str(contest.pk), 'platform': contest.platform,
         'is_demo': contest.source_data.get('demo') is True,
@@ -109,22 +110,27 @@ def claim_problems(member, ids=None):
     member = TeamMembership.objects.select_for_update(of=('self',)).select_related('team','user').get(pk=member.pk)
     if not member.is_active:
         raise ValueError('当前成员权限已失效')
-    qs = ContestProblemProgress.objects.select_for_update(of=('self',)).select_related('participation').filter(participation__user=member.user)
+    from .ac_evidence import ACEvidence
+    qs = ACEvidence([member.user_id]).contests().select_for_update(of=('self',))
     if ids is not None:
         qs = qs.filter(pk__in=ids)
     result = []
+    from .reward_snapshot import RewardSnapshot
+    snapshot = RewardSnapshot(member)
+    profile = UserProfile.objects.filter(user=member.user).first()
+    bindings = set(PlatformBinding.objects.filter(user=member.user).values_list('platform','account'))
     for p in qs.order_by('pk'):
         c = p.participation
-        if not PlatformBinding.objects.filter(user=member.user, platform=c.platform, account=c.account).exists():
+        if (c.platform,c.account) not in bindings:
             continue
-        amount, group, reason = reward_for(p, member)
-        if not amount or reason or claimed(p, member):
+        from .problem_difficulty import for_problem
+        amount, group, reason = reward_for(p, member, profile, difficulty_info=for_problem(p, snapshot.info(c.platform)))
+        if not amount or reason or snapshot.claimed(p):
             continue
         try:
             with transaction.atomic():
                 from .models import PlatformProblemClaim
-                from .platform_rewards import contest_identity
-                platform,key=contest_identity(p)
+                platform,key=snapshot.identity(p)
                 PlatformProblemClaim.objects.create(team=member.team,user=member.user,member=member,
                     platform=platform,account=c.account.casefold(),problem_key=key,amount=amount,group=group,source='contest')
                 ContestProblemClaim.objects.create(member=member, user=member.user, team=member.team, platform=c.platform,
@@ -132,6 +138,7 @@ def claim_problems(member, ids=None):
                     amount=amount, group=group)
         except IntegrityError:
             continue
+        snapshot.new_claims.add((platform,key))
         mode='AC 奖励（时间不可核验，宽松兜底）' if p.accepted_at is None else '赛内 AC 奖励'
         add_currency(member, amount, CurrencyTransaction.CONTEST_REWARD,
                      f'{c.title[:115]} · {p.label} {mode}')

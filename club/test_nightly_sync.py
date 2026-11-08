@@ -63,6 +63,32 @@ class NightlySyncTests(TestCase):
     def test_expired_chain_stops(self):
         self.assertEqual(sync_bound_accounts_nightly('2000-01-01')['status'], 'expired')
 
+    @patch('club.tasks.sync_bound_accounts_nightly.apply_async')
+    @patch('club.platform_account_views.enqueue')
+    def test_waiting_for_same_users_account_reschedules_then_starts_next(self, enqueue, again):
+        other = PlatformBinding.objects.create(user=self.author, platform='atcoder',
+            account='nightly-at', status='ready', synced_at=timezone.now()-timedelta(days=2))
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertEqual(sync_bound_accounts_nightly()['binding_id'], self.binding.pk)
+        again.reset_mock()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertEqual(sync_bound_accounts_nightly()['status'], 'waiting')
+        again.assert_called_once_with(kwargs={'day': timezone.localdate().isoformat()}, countdown=30, priority=8)
+        self.binding.refresh_from_db()
+        self.binding.status = 'ready'
+        self.binding.synced_at = timezone.now()
+        self.binding.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertEqual(sync_bound_accounts_nightly()['binding_id'], other.pk)
+        other.refresh_from_db()
+        other.status = 'ready'
+        other.synced_at = timezone.now()
+        other.save()
+        again.reset_mock()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertEqual(sync_bound_accounts_nightly()['status'], 'complete')
+        again.assert_not_called()
+
     def test_unchanged_records_do_not_write(self):
         row = {'problem_key':'1:a', 'solved_on':None, 'title':'A', 'url':''}
         store(self.binding, [row])

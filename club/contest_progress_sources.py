@@ -4,24 +4,58 @@ Discovery and per-contest hydration run separately so old histories are retained
 when a platform hides its scoreboard. OJ-Insight source attribution is in docs.
 """
 import csv
+import hashlib
 import io
 import math
 import logging
 import re
 import time
 import threading
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 from bs4 import BeautifulSoup
-from django.core.cache import cache
+from django.core.cache import cache, caches
 from .platform_sync import Remote, SyncError
+from .public_catalog import PublicRemote, release_cache_lock
+from .problem_difficulty import normalize as normalize_difficulty
+
+class DiscoveryRows(list):
+    def __init__(self, rows, warning='', *, more=False):
+        super().__init__(rows)
+        self.warning = warning
+        self.more = more
+
+
+class ContinueHydration(SyncError):
+    """A bounded page batch completed; persist its cursor and enqueue the next."""
+
+    def __init__(self, message, *, delay=0):
+        super().__init__(message)
+        self.delay = delay
+
 
 logger=logging.getLogger(__name__)
 
 _cf_lock = threading.Lock()
 _cf_last = 0.0
+_ATCODER_DISCOVERY_PAGE_LIMIT = 24
+_ATCODER_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
+_LUOGU_SCAN_PAGE_LIMIT = 15
+_LUOGU_SCAN_SECONDS = 45
+_LUOGU_METADATA_RESERVE_SECONDS = 45
+_LUOGU_METADATA_BATCH_SIZE = 45
+_LUOGU_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
+_NOWCODER_AC_PAGE_LIMIT = 15
+_NOWCODER_AC_SCAN_SECONDS = 45
+_NOWCODER_RATING_RESERVE_SECONDS = 45
+_NOWCODER_DISCOVERY_PAGE_LIMIT = 15
+_NOWCODER_DISCOVERY_SCAN_SECONDS = 45
+_NOWCODER_DISCOVERY_METADATA_LIMIT = 45
+_NOWCODER_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
 
 
 def time_value(value):
@@ -37,15 +71,13 @@ def stamp(value):
 
 
 def cached(remote, url):
-    key = 'contest-evidence:v1:' + url
-    value = cache.get(key)
-    if value is None:
-        value = remote.json(url)
-        cache.set(key, value, 3600)
-    return value
+    return PublicRemote(remote).json(url)
 
 
 def cf(remote, method, params=''):
+    if method in ('contest.list', 'problemset.problems'):
+        data = PublicRemote(remote).json('https://codeforces.com/api/' + method + ('?' + params if params else ''), limit=64 * 1024 * 1024)
+        return data['result']
     global _cf_last
     with _cf_lock:
         time.sleep(max(0, 2.1 - (time.monotonic() - _cf_last)))
@@ -68,25 +100,96 @@ def lc_host(account):
     return ('https://leetcode.cn', account[3:], 'CN') if account.startswith('cn:') else ('https://leetcode.com', account, 'US')
 
 
+def parse_contest_url(url):
+    """Only supported public contest URLs; never fetch arbitrary user URLs."""
+    from urllib.parse import urlsplit
+    if not isinstance(url, str) or len(url) > 500:
+        raise ValueError('比赛链接无效')
+    parsed = urlsplit(url)
+    if parsed.scheme != 'https' or parsed.username or parsed.password or parsed.port:
+        raise ValueError('请使用官方 HTTPS 比赛链接')
+    patterns = {
+        'atcoder.jp': ('atcoder', r'/contests/([A-Za-z0-9_-]+)/?'),
+        'codeforces.com': ('codeforces', r'/contest/(\d+)/?'),
+        'ac.nowcoder.com': ('nowcoder', r'/acm/contest/(\d+)/?'),
+        'www.luogu.com.cn': ('luogu', r'/contest/(\d+)/?'),
+        'leetcode.cn': ('leetcode', r'/contest/((?:biweekly|weekly)-contest-\d+)/?'),
+        'leetcode.com': ('leetcode', r'/contest/((?:biweekly|weekly)-contest-\d+)/?'),
+    }
+    platform, pattern = patterns.get(parsed.hostname, ('', r'(?!)'))
+    match = re.fullmatch(pattern, parsed.path)
+    if not match:
+        raise ValueError('不支持的比赛链接（QOJ 保持普通过题奖励）')
+    return platform, match[1], parsed.hostname
+
+
+def contest_link_bindings(bindings, platform, host):
+    bindings = bindings.filter(platform=platform)
+    if platform == 'leetcode':
+        if host == 'leetcode.cn':
+            return bindings.filter(account__startswith='cn:')
+        return bindings.exclude(account__startswith='cn:')
+    return bindings
+
+
+def linked_contest(remote, url, account):
+    remote = PublicRemote(remote)
+    platform, key, host = parse_contest_url(url)
+    if platform == 'atcoder':
+        catalog = cached(remote, 'https://kenkoooo.com/atcoder/resources/contests.json')
+        c = next((c for c in catalog if c['id'] == key), None)
+        if not c: raise SyncError('比赛目录尚未收录该比赛，请稍后重试')
+        return header(key,c['title'],f'https://atcoder.jp/contests/{key}',c['start_epoch_second'],c['start_epoch_second']+c['duration_second'])
+    if platform == 'leetcode':
+        base, _, region = lc_host(account)
+        if host != base.removeprefix('https://'): raise SyncError('比赛链接与绑定账号地区不一致')
+        c = remote.json(base + '/contest/api/info/' + key + '/')['contest']
+        return header(key,c.get('title',key),base+'/contest/'+key+'/',c['start_time'],c['start_time']+c['duration'],{'manual':True})
+    if platform == 'codeforces':
+        c = next((c for c in cf(remote,'contest.list','gym=false') if str(c['id'])==key),None)
+        if not c: raise SyncError('比赛未收录')
+        return header(key,c['name'],f'https://codeforces.com/contest/{key}',c['startTimeSeconds'],c['startTimeSeconds']+c['durationSeconds'])
+    if platform == 'nowcoder':
+        c = remote.json('https://ac.nowcoder.com/acm/contest/contest-info?id='+key)['data']
+        return header(key,c['name'],'https://ac.nowcoder.com/acm/contest/'+key,c['startTime']/1000,c['endTime']/1000)
+    configure_luogu(remote)
+    d = remote.json('https://www.luogu.com.cn/contest/'+key,headers={'x-lentille-request':'content-only'})
+    c = d.get('data',d.get('currentData',d))['contest']
+    return header(key,c['name'],'https://www.luogu.com.cn/contest/'+key,c['startTime'],c['endTime'])
+
+
 def discover(remote, platform, account):
+    remote = PublicRemote(remote)
     user = quote(account, safe='')
+    from .submission_evidence import discovery_snapshot
+    stored, covered_until = discovery_snapshot(getattr(remote,'evidence_user_id',None),platform,account) if platform in {'codeforces','atcoder'} else ([],None)
     if platform == 'codeforces':
         history = cf(remote, 'user.rating', 'handle=' + user)
         contests = {c['id']: c for c in cf(remote, 'contest.list', 'gym=false')}
-        # Include official unrated participation as well as rated history.
+        # Discover participation by original contest time, regardless of rating or party type.
         keys = {r['contestId'] for r in history}
         offset = 1; evidence = {}
+        for row in stored:
+            try: cid=int(row.contest_key)
+            except ValueError: continue
+            c=contests.get(cid)
+            t=row.submitted_at.timestamp()
+            if c and c.get('startTimeSeconds',0)<=t<c.get('startTimeSeconds',0)+c.get('durationSeconds',0):
+                keys.add(cid)
+                if row.verdict=='OK': evidence.setdefault(cid,[]).append({'label':row.problem_key.split(':',1)[-1].upper(),'time':t})
         while True:
             rows = cf(remote, 'user.status', f'handle={user}&from={offset}&count=10000')
-            keys.update(r['contestId'] for r in rows if r.get('contestId') in contests and
-                        r.get('author', {}).get('participantType') in {'CONTESTANT', 'OUT_OF_COMPETITION'})
+            keys.update(r['contestId'] for r in rows
+                        if (c := contests.get(r.get('contestId')))
+                        and (t := time_value(r.get('creationTimeSeconds'))) is not None
+                        and c.get('startTimeSeconds', 0) <= t < c.get('startTimeSeconds', 0) + c.get('durationSeconds', 0))
             for s in rows:
-                if s.get('contestId') not in contests or s.get('verdict') != 'OK' or s.get('author', {}).get('participantType') not in {'CONTESTANT','OUT_OF_COMPETITION'}:
+                if s.get('contestId') not in contests or s.get('verdict') != 'OK':
                     continue
                 if not any(m.get('handle','').casefold() == account.casefold() for m in s.get('author', {}).get('members', [])):
                     continue
                 evidence.setdefault(s['contestId'], []).append({'label':s['problem']['index'],'time':s.get('creationTimeSeconds')})
-            if len(rows) < 10000:
+            if len(rows) < 10000 or covered_until and rows and min(r.get('creationTimeSeconds',0) for r in rows) <= covered_until:
                 break
             offset += len(rows)
         return [header(c['id'], c['name'], f"https://codeforces.com/contest/{c['id']}",
@@ -97,9 +200,64 @@ def discover(remote, platform, account):
         if not isinstance(history, list):
             raise SyncError('AtCoder 比赛历史不可用')
         contests = {c['id']: c for c in cached(remote, 'https://kenkoooo.com/atcoder/resources/contests.json')}
-        return [header(c['id'], c['title'], 'https://atcoder.jp/contests/' + c['id'],
-                       c['start_epoch_second'], c['start_epoch_second'] + c['duration_second'])
-                for r in history if (c := contests.get(r.get('ContestScreenName', '').removesuffix('.contest.atcoder.jp')))]
+        from .contest_rewards import REWARD_START
+        keys = {r.get('ContestScreenName', '').removesuffix('.contest.atcoder.jp') for r in history}
+        for row in stored:
+            c=contests.get(row.contest_key)
+            if c and c['start_epoch_second'] <= row.submitted_at.timestamp() < c['start_epoch_second']+c['duration_second']:
+                keys.add(row.contest_key)
+        cutoff = int(REWARD_START.timestamp())
+        cursor = covered_until or cutoff
+        user_id = getattr(remote, 'evidence_user_id', None)
+        checkpoint_cache = caches['platform_requests'] if type(user_id) is int else None
+        checkpoint_key = f'atcoder-discovery:v1:{user_id}:{user}:{cutoff}'
+        scanned_keys = set()
+        if checkpoint_cache is not None:
+            checkpoint = checkpoint_cache.get(checkpoint_key)
+            if checkpoint:
+                cursor = max(cursor, checkpoint['cursor'])
+                scanned_keys.update(checkpoint['keys'])
+
+        warning = 'AtCoder 提交历史尚未扫完，已保留发现的比赛，下次同步将继续'
+        deadline = getattr(remote, 'deadline', None)
+        for page in range(_ATCODER_DISCOVERY_PAGE_LIMIT):
+            if page:
+                if isinstance(deadline, (int, float)) and time.monotonic() + 3.1 >= deadline:
+                    break
+                time.sleep(3.1)
+            try:
+                rows = remote.json(f'https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions?user={user}&from_second={cursor}')
+                if not isinstance(rows, list):
+                    raise SyncError('AtCoder 提交历史暂不可用')
+            except SyncError as exc:
+                warning = 'AtCoder 提交历史获取不完整，已保留发现的比赛：' + str(exc)
+                break
+            scanned_keys.update(r.get('contest_id') for r in rows
+                                if r.get('user_id', account).casefold() == account.casefold()
+                                and (c := contests.get(r.get('contest_id')))
+                                and (t := time_value(r.get('epoch_second'))) is not None
+                                and c['start_epoch_second'] <= t < c['start_epoch_second'] + c['duration_second'])
+            if len(rows) < 500:
+                warning = ''
+                break
+            times = [t for r in rows if (t := time_value(r.get('epoch_second'))) is not None]
+            if not times or int(max(times)) + 1 <= cursor:
+                warning = 'AtCoder 提交分页无法继续，已保留发现的比赛'
+                break
+            cursor = int(max(times)) + 1
+
+        if checkpoint_cache is not None:
+            if warning:
+                checkpoint_cache.set(checkpoint_key, {'cursor': cursor, 'keys': sorted(scanned_keys)},
+                                     _ATCODER_DISCOVERY_CHECKPOINT_TTL)
+            else:
+                checkpoint_cache.delete(checkpoint_key)
+        return DiscoveryRows(
+            [header(c['id'], c['title'], 'https://atcoder.jp/contests/' + c['id'],
+                    c['start_epoch_second'], c['start_epoch_second'] + c['duration_second'])
+             for key in sorted((keys | scanned_keys) - {None}) if (c := contests.get(key))],
+            warning,
+        )
     if platform == 'leetcode':
         host, user, region = lc_host(account)
         arg = 'userSlug' if region == 'CN' else 'username'
@@ -122,33 +280,7 @@ def discover(remote, platform, account):
                                  {'rank': r['ranking']}))
         return result
     if platform == 'nowcoder':
-        history = remote.json('https://ac.nowcoder.com/acm/contest/rating-history?uid=' + user)
-        rating_rows = history.get('data', [])
-        if isinstance(rating_rows, dict):
-            rating_rows = next((rating_rows[k] for k in ['list','records','ratingHistory','ratingList'] if isinstance(rating_rows.get(k),list)), [])
-        keys = {str(r.get('contestId',r.get('contest_id',r.get('id','')))) for r in rating_rows}
-        keys.discard(''); page = 1; seen_pages = set()
-        while True:
-            html = remote.text(f'https://ac.nowcoder.com/acm/contest/profile/{user}/join-index?page={page}')
-            soup = BeautifulSoup(html, 'html.parser')
-            found = set(re.findall(r'/acm/contest/(\d+)(?:["/?#]|$)', str(soup.select('table'))))
-            signature = tuple(sorted(found))
-            if not found or signature in seen_pages:
-                break
-            seen_pages.add(signature)
-            keys |= found
-            if not soup.select('a[rel="next"]') and not any(a.get_text(strip=True) in ['下一页', '>'] for a in soup.select('.pagination a')):
-                break
-            page += 1
-        result = []
-        for key in keys:
-            c = remote.json('https://ac.nowcoder.com/acm/contest/contest-info?id=' + key).get('data') or {}
-            if c.get('startTime') and c.get('endTime'):
-                result.append(header(key, c['name'], 'https://ac.nowcoder.com/acm/contest/' + key,
-                                     c['startTime']/1000, c['endTime']/1000))
-        if not keys and 'curUser' not in html and history.get('code') != 0:
-            raise SyncError('牛客参赛历史暂不可公开读取')
-        return result
+        return discover_nowcoder(remote, user)
     if platform == 'luogu':
         from .platform_sync import luogu
         try:cookie = configure_luogu(remote)
@@ -157,18 +289,136 @@ def discover(remote, platform, account):
         profile = luogu(remote, account)
         data = remote.json(profile['profile_url'], headers={'x-lentille-request': 'content-only'})
         data = data.get('data', data.get('currentData', data))
-        result = []
-        for r in data.get('elo', []):
-            key = str((r.get('contest') or {}).get('id', ''))
-            if not key:
+        discovery_warning = ''
+        rated_keys = {str((r.get('contest') or {}).get('id', '')) for r in data.get('elo', [])} - {''}
+        keys = set(rated_keys)
+        checkpoint = {'next_page': 1}
+        checkpoint_cache = None
+        uid = profile['profile_url'].rstrip('/').rsplit('/', 1)[-1]
+        user_id = getattr(remote, 'evidence_user_id', None)
+        if type(user_id) is int:
+            checkpoint_cache = caches['platform_requests']
+            checkpoint_key = f'luogu-discovery:v1:{user_id}:{uid}'
+            checkpoint = checkpoint_cache.get(checkpoint_key) or checkpoint
+        if cookie:
+            from .contest_rewards import REWARD_START
+            try:
+                if checkpoint['next_page'] is not None:
+                    scan_luogu_records(remote, uid, cookie, REWARD_START.timestamp(), discovered=keys,
+                                       checkpoint=checkpoint, reserve=_LUOGU_METADATA_RESERVE_SECONDS)
+            except SyncError as exc:
+                discovery_warning = '提交记录获取不完整，已保留发现的比赛：' + str(exc)
+        checked_headers = checkpoint.get('checked_headers', {})
+        queued_keys = list(checkpoint.get('pending_keys', ()))
+        new_keys = keys - checked_headers.keys() - set(queued_keys)
+        queued_keys.extend(sorted(new_keys, key=lambda key: (key not in rated_keys, key)))
+        failed_keys = []
+        attempted = 0
+        deadline = getattr(remote, 'deadline', None)
+        for key in queued_keys[:_LUOGU_METADATA_BATCH_SIZE]:
+            if isinstance(deadline, (int, float)) and time.monotonic() >= deadline:
+                break
+            attempted += 1
+            try:
+                d = remote.json('https://www.luogu.com.cn/contest/' + key, headers={'x-lentille-request':'content-only'})
+            except SyncError:
+                failed_keys.append(key)
                 continue
-            d = remote.json('https://www.luogu.com.cn/contest/' + key, headers={'x-lentille-request':'content-only'})
             c = d.get('data', d.get('currentData', d)).get('contest', {})
+            checked_headers[key] = None
             if c.get('startTime') and c.get('endTime'):
-                result.append(header(key, c['name'], 'https://www.luogu.com.cn/contest/' + key,
-                                     c['startTime'], c['endTime']))
-        return result
+                checked_headers[key] = header(key, c['name'], 'https://www.luogu.com.cn/contest/' + key,
+                                              c['startTime'], c['endTime'])
+        pending_keys = queued_keys[attempted:] + failed_keys
+        if pending_keys and not discovery_warning:
+            discovery_warning = '部分洛谷比赛详情暂不可读取，已保留已取得的比赛'
+        if checkpoint_cache is not None:
+            if pending_keys or (cookie and checkpoint['next_page'] is not None):
+                checkpoint.update(pending_keys=pending_keys, checked_headers=checked_headers)
+                checkpoint_cache.set(checkpoint_key, checkpoint, _LUOGU_DISCOVERY_CHECKPOINT_TTL)
+            else:
+                checkpoint_cache.delete(checkpoint_key)
+        return DiscoveryRows([row.copy() for row in checked_headers.values() if row is not None], discovery_warning)
     raise SyncError('不支持此平台')
+
+
+def discover_nowcoder(remote, user):
+    user_id = getattr(remote, 'evidence_user_id', None)
+    backend = caches['platform_requests'] if type(user_id) is int else None
+    cache_key = f'nowcoder-discovery:v1:{user_id}:{user}'
+    checkpoint = backend.get(cache_key) if backend is not None else None
+    if checkpoint is None:
+        history = remote.json('https://ac.nowcoder.com/acm/contest/rating-history?uid=' + user)
+        rating_rows = history.get('data', [])
+        if isinstance(rating_rows, dict):
+            rating_rows = next((rating_rows[k] for k in ('list', 'records', 'ratingHistory', 'ratingList')
+                                if isinstance(rating_rows.get(k), list)), [])
+        rated_keys = {str(r.get('contestId', r.get('contest_id', r.get('id', '')))) for r in rating_rows} - {''}
+        checkpoint = {'next_page': 1, 'history_available': history.get('code') == 0,
+                      'seen': set(), 'headers': {}, 'pending_keys': sorted(rated_keys)}
+
+    queued = checkpoint['pending_keys']
+    headers = checkpoint['headers']
+    known = set(queued) | headers.keys()
+    seen = checkpoint['seen']
+    first_page = checkpoint['next_page']
+    scan_error = ''
+    if first_page is not None:
+        try:
+            with request_budget(remote, _NOWCODER_DISCOVERY_SCAN_SECONDS, _NOWCODER_RATING_RESERVE_SECONDS):
+                for page in range(first_page, first_page + _NOWCODER_DISCOVERY_PAGE_LIMIT):
+                    html = remote.text(f'https://ac.nowcoder.com/acm/contest/profile/{user}/join-index?page={page}')
+                    soup = BeautifulSoup(html, 'html.parser')
+                    found = set(re.findall(r'/acm/contest/(\d+)(?:["/?#]|$)', str(soup.select('table'))))
+                    signature = tuple(sorted(found))
+                    if not found and not known and 'curUser' not in html and not checkpoint['history_available']:
+                        raise SyncError('牛客参赛历史暂不可公开读取')
+                    if signature in seen:
+                        raise SyncError('牛客参赛历史分页未能继续')
+                    queued.extend(sorted(found - known))
+                    known.update(found)
+                    has_next = soup.select('a[rel="next"]') or any(
+                        a.get_text(strip=True) in ['下一页', '>'] for a in soup.select('.pagination a'))
+                    if not found or not has_next:
+                        checkpoint['next_page'] = None
+                        break
+                    seen.add(signature)
+                    checkpoint['next_page'] = page + 1
+        except SyncError as exc:
+            scan_error = str(exc)
+
+    failed = []
+    attempted = 0
+    checked = len(headers)
+    deadline = getattr(remote, 'deadline', None)
+    for key in queued[:_NOWCODER_DISCOVERY_METADATA_LIMIT]:
+        if isinstance(deadline, (int, float)) and time.monotonic() >= deadline:
+            break
+        attempted += 1
+        try:
+            c = remote.json('https://ac.nowcoder.com/acm/contest/contest-info?id=' + key).get('data') or {}
+        except SyncError:
+            failed.append(key)
+            continue
+        headers[key] = None
+        if c.get('startTime') and c.get('endTime'):
+            headers[key] = header(key, c['name'], 'https://ac.nowcoder.com/acm/contest/' + key,
+                                  c['startTime']/1000, c['endTime']/1000)
+    checkpoint['pending_keys'] = queued[attempted:] + failed
+    incomplete = checkpoint['next_page'] is not None or bool(checkpoint['pending_keys'])
+    warning = ''
+    if incomplete:
+        warning = '牛客参赛历史尚未同步完整，已保留进度'
+        if scan_error:
+            warning += '：' + scan_error
+    if backend is not None:
+        if incomplete:
+            backend.set(cache_key, checkpoint, _NOWCODER_DISCOVERY_CHECKPOINT_TTL)
+        else:
+            backend.delete(cache_key)
+    advanced = checkpoint['next_page'] != first_page or len(headers) > checked
+    return DiscoveryRows([row.copy() for row in headers.values() if row is not None], warning,
+                         more=backend is not None and incomplete and advanced)
 
 
 def problem(key, label, title, url, difficulty=None, source='', ac=None):
@@ -209,7 +459,26 @@ def configure_luogu(remote):
     return cookie
 
 
-def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=None, evidence=None):
+@contextmanager
+def request_budget(remote, seconds, reserve):
+    deadline = getattr(remote, 'deadline', None)
+    if not isinstance(deadline, (int, float)):
+        yield
+        return
+    remote.remote.deadline = min(time.monotonic() + seconds, deadline - reserve)
+    try:
+        yield
+    finally:
+        remote.remote.deadline = deadline
+
+
+def scan_luogu_records(remote, uid, cookie, since, *, reserve=0, **kwargs):
+    with request_budget(remote, _LUOGU_SCAN_SECONDS, reserve):
+        return luogu_ac_times(remote, uid, cookie, since, **kwargs)
+
+
+def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=None, evidence=None,
+                   discovered=None, checkpoint=None, problem_ids=None):
     """Read the authenticated Lentille record list, independently implemented.
 
     Protocol reference: icpc-workbench luogu adapter. Missing timestamps remain
@@ -221,7 +490,11 @@ def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=
     for name in ('_uid', '__client_id'):
         remote.session.cookies.set(name, pairs[name], domain='www.luogu.com.cn', path='/', secure=True)
     result = evidence if evidence is not None else {}; seen = set()
-    for page in range(1, 101):
+    first_page = checkpoint['next_page'] if checkpoint is not None else 1
+    page_limit = _LUOGU_SCAN_PAGE_LIMIT if checkpoint is not None else 100
+    if checkpoint is not None and checkpoint.get('last_signature'):
+        seen.add(tuple(checkpoint['last_signature']))
+    for page in range(first_page, first_page + page_limit):
         if page > 1:
             time.sleep(0.5)
         data = remote.json(f'https://www.luogu.com.cn/record/list?user={uid}&page={page}',
@@ -231,16 +504,17 @@ def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=
         if not isinstance(rows, list):
             raise SyncError('洛谷提交记录暂不可读取，请检查 Cookie 是否有效')
         if not rows:
+            if checkpoint is not None:
+                checkpoint['next_page'] = None
             return result
         signature = tuple(str(r.get('id')) for r in rows)
         if signature in seen:
             raise SyncError('洛谷提交记录分页未能继续')
         seen.add(signature)
+        if any(str((row.get('user') or {}).get('uid', '')) != str(uid) for row in rows):
+            raise SyncError('洛谷提交记录账号不匹配')
         times = []
         for row in rows:
-            owner = row.get('user') or {}
-            if str(owner.get('uid','')) != str(uid):
-                raise SyncError('洛谷提交记录账号不匹配')
             value = row.get('submitTime')
             try:
                 value = float(value)
@@ -254,13 +528,32 @@ def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=
                 times.append(value)
             pid = (row.get('problem') or {}).get('pid')
             record_contest = row.get('contest') or {}
+            if discovered is not None and record_contest.get('id'):
+                discovered.add(str(record_contest['id']))
             same_contest = contest_key is None or str(record_contest.get('id')) == str(contest_key)
-            if row.get('status') == 12 and pid:
+            if row.get('status') == 12 and pid and (problem_ids is None or pid in problem_ids):
                 if same_contest:result.setdefault(pid, []).append(value)
                 elif other_evidence is not None:other_evidence.setdefault(pid,[]).append(value)
         if len(times) == len(rows) and max(times) < since:
+            if checkpoint is not None:
+                checkpoint['next_page'] = None
             return result
+        if checkpoint is not None:
+            checkpoint.update(next_page=page + 1, last_signature=signature)
+    if checkpoint is not None:
+        raise ContinueHydration('洛谷提交记录分批核验中')
     raise SyncError('洛谷历史记录过多，本次未能完整核验比赛时段')
+
+
+def summarize_luogu_times(evidence, start, end):
+    summary = {}
+    for pid, times in evidence.items():
+        inside = min((t for t in times if t is not None and start <= t < end), default=None)
+        outside = min((t for t in times if t is not None and not start <= t < end), default=None)
+        summary[pid] = [t for t in (inside, outside) if t is not None]
+        if None in times:
+            summary[pid].append(None)
+    return summary
 
 
 def nowcoder_ratings(remote):
@@ -270,7 +563,7 @@ def nowcoder_ratings(remote):
     values = {}; seen = set(); page = 1; fetched = 0
     try:
         while True:
-            data = remote.json(f'https://www.nowcoder.com/problem/tracker/list?contestType=0&page={page}&pageSize=200&limit=200',
+            data = remote.json(f'https://www.nowcoder.com/problem/tracker/list?contestType=0&page={page}&pageSize=100&limit=100',
                                headers={'Referer':'https://www.nowcoder.com/problem/tracker'})
             if data.get('code') not in (0,200):
                 break
@@ -288,7 +581,7 @@ def nowcoder_ratings(remote):
                     if key is not None and difficulty is not None:
                         difficulty = int(difficulty)
                         if difficulty > 0:
-                            values[str(key)] = {1:800,2:1200,3:1600,4:2000,5:2400,6:2800,7:3000,8:3200,9:3400,10:3500}.get(difficulty,difficulty)
+                            values[str(key)] = normalize_difficulty('nowcoder', difficulty)
             fetched += len(papers)
             total = data.get('totalCount')
             if isinstance(total,int) and fetched >= total:
@@ -301,20 +594,58 @@ def nowcoder_ratings(remote):
 
 
 def nowcoder_accepted(remote, account):
-    cache_key = 'nc-accepted:v2:' + account
-    existing = cache.get(cache_key)
-    if existing is not None:
-        return existing
-    accepted = {}; page = 1; seen = set()
-    while True:
+    from .submission_evidence import EVIDENCE_MAX_AGE
+
+    backend = caches['platform_requests']
+    key = 'nc-accepted:v3:' + account
+    checkpoint = backend.get(key)
+    if checkpoint is not None and checkpoint['next_page'] is None:
+        return checkpoint['accepted']
+    lock_key = key + ':lock'
+    owner = uuid.uuid4().hex
+    if not backend.add(lock_key, owner, 180):
+        raise ContinueHydration('牛客 AC 记录正在分批核验', delay=10)
+    try:
+        checkpoint = backend.get(key)
+        if checkpoint is not None and checkpoint['next_page'] is None:
+            return checkpoint['accepted']
+        if checkpoint is None:
+            checkpoint = {'next_page': 1, 'accepted': {}, 'signatures': set(), 'observed_at': time.time()}
+        first_page = checkpoint['next_page']
+        try:
+            with request_budget(PublicRemote(remote), _NOWCODER_AC_SCAN_SECONDS, _NOWCODER_RATING_RESERVE_SECONDS):
+                scan_nowcoder_ac_pages(remote, account, checkpoint)
+        except SyncError as exc:
+            from .platform_limits import retryable
+            if checkpoint['next_page'] > first_page and retryable(exc):
+                raise ContinueHydration('牛客 AC 记录正在分批核验', delay=10) from exc
+            raise
+        finally:
+            remaining = int(EVIDENCE_MAX_AGE.total_seconds() - (time.time() - checkpoint['observed_at']))
+            if remaining > 0 and checkpoint['next_page'] != 1:
+                ttl = min(300, remaining) if checkpoint['next_page'] is None else remaining
+                backend.set(key, checkpoint, ttl)
+        if remaining <= 0:
+            raise SyncError('牛客 AC 记录核验已过期，请重新同步')
+        if checkpoint['next_page'] is not None:
+            raise ContinueHydration('牛客 AC 记录正在分批核验')
+        return checkpoint['accepted']
+    finally:
+        release_cache_lock(backend, lock_key, owner)
+
+
+def scan_nowcoder_ac_pages(remote, account, checkpoint):
+    accepted = checkpoint['accepted']
+    seen = checkpoint['signatures']
+    first_page = checkpoint['next_page']
+    for page in range(first_page, first_page + _NOWCODER_AC_PAGE_LIMIT):
         html = remote.text(f'https://ac.nowcoder.com/acm/contest/profile/{account}/practice-coding?languageCategoryFilter=-1&orderType=DESC&page={page}&pageSize=200&search=&statusTypeFilter=5')
         if not re.search(r'window\.curUser\.id\s*=\s*["\']'+re.escape(account)+r'["\']', html):
             raise SyncError('牛客公开 AC 记录账号不匹配')
         soup = BeautifulSoup(html, 'html.parser'); rows = [tr for tr in soup.select('table tr') if tr.select('td')]
-        signature = str(rows)
+        signature = hashlib.sha256(str(rows).encode()).hexdigest()
         if signature in seen:
             raise SyncError('牛客 AC 分页未能继续，请稍后重试')
-        seen.add(signature)
         for tr in rows:
             cells = tr.select('td')
             verdict = cells[2].get_text(strip=True).lower() if len(cells) >= 3 else ''
@@ -329,25 +660,25 @@ def nowcoder_accepted(remote, account):
                     accepted.setdefault(m[1], []).append(timestamp)
         has_next = bool(soup.select('a[rel=next]')) or any(a.get_text(strip=True) in ['下一页','>','›'] and 'disabled' not in (a.parent.get('class') or []) for a in soup.select('.pagination a'))
         if not has_next and len(rows) < 200:
-            break
-        page += 1
-    cache.set(cache_key, accepted, 300)
-    return accepted
+            checkpoint['next_page'] = None
+            return
+        seen.add(signature)
+        checkpoint['next_page'] = page + 1
 
 
 def hydrate(remote, contest):
+    remote = PublicRemote(remote, historical=contest.ends_at.timestamp() < time.time() - 7 * 86400)
     platform, key, account = contest.platform, quote(contest.contest_key, safe=''), contest.account
     start, end = contest.starts_at.timestamp(), contest.ends_at.timestamp()
+    from .submission_evidence import contest_rows
+    shared = contest_rows(contest) if platform in {'codeforces','atcoder'} else None
     if platform == 'codeforces':
-        evidence = getattr(contest, 'source_data', {}).get('verified_submissions')
+        evidence = ([{'label':r.problem_key.split(':',1)[-1].upper(),'time':r.submitted_at.timestamp()} for r in shared if r.verdict=='OK'] if shared is not None else getattr(contest, 'source_data', {}).get('verified_submissions'))
         if isinstance(evidence, list):
-            catalog = cache.get('cf-problems-by-contest:v1')
-            if catalog is None:
-                catalog = {}
-                for p in cf(remote, 'problemset.problems')['problems']:
-                    if 'contestId' in p:
-                        catalog.setdefault(str(p['contestId']), []).append(p)
-                cache.set('cf-problems-by-contest:v1', catalog, 3600)
+            catalog = {}
+            for p in cf(remote, 'problemset.problems')['problems']:
+                if 'contestId' in p:
+                    catalog.setdefault(str(p['contestId']), []).append(p)
             tasks = catalog.get(contest.contest_key)
             if tasks:
                 accepted = {}
@@ -362,11 +693,9 @@ def hydrate(remote, contest):
                                    p['index'] in accepted and accepted[p['index']] is None) for p in sorted(tasks,key=lambda p:p['index'])], ''
         # Current CF requires anonymous standings requests with contestId only.
         data = cf(remote, 'contest.standings', f'contestId={key}')
-        official = [r for r in data['rows'] if r['party']['participantType'] in {'CONTESTANT','OUT_OF_COMPETITION'} and
-                    any(m['handle'].casefold() == account.casefold() for m in r['party']['members'])]
+        official = [r for r in data['rows'] if any(m['handle'].casefold() == account.casefold() for m in r['party']['members'])]
         submissions = cf(remote, 'contest.status', f'contestId={key}&handle={quote(account, safe="")}&from=1&count=10000')
-        submissions = [s for s in submissions if s.get('author', {}).get('participantType') in {'CONTESTANT','OUT_OF_COMPETITION'}
-                       and any(m.get('handle','').casefold() == account.casefold() for m in s.get('author', {}).get('members', []))]
+        submissions = [s for s in submissions if any(m.get('handle','').casefold() == account.casefold() for m in s.get('author', {}).get('members', []))]
         if not official and not submissions:
             raise SyncError('未找到实际参赛记录')
         accepted = {}
@@ -397,20 +726,24 @@ def hydrate(remote, contest):
         models = cached(remote, 'https://kenkoooo.com/atcoder/resources/problem-models.json')
         accepted = {}; cursor = int(start); observed = False; timing_warning=''
         while cursor < end:
-            rows = remote.json(f'https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions?user={quote(account, safe="")}&from_second={cursor}')
+            if shared is not None:
+                rows=[{'contest_id':contest.contest_key,'problem_id':r.problem_key,'epoch_second':r.submitted_at.timestamp(),'user_id':account,'result':r.verdict} for r in shared]
+                observed=True
+            else:
+                rows = remote.json(f'https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions?user={quote(account, safe="")}&from_second={cursor}')
             if not isinstance(rows, list):
                 raise SyncError('AtCoder 提交历史暂不可用')
             observed = observed or bool(rows)
             for s in rows:
                 t = time_value(s.get('epoch_second'))
-                if s.get('contest_id') == contest.contest_key and s.get('result') == 'AC':
+                if s.get('user_id', account).casefold() == account.casefold() and s.get('contest_id') == contest.contest_key and s.get('result') == 'AC':
                     if t is None:accepted.setdefault(s['problem_id'],None)
                     elif start<=t<end:accepted[s['problem_id']] = min(t,accepted.get(s['problem_id']) or t)
-            if len(rows) < 500:
+            if shared is not None or len(rows) < 500:
                 break
             times=[t for s in rows if (t:=time_value(s.get('epoch_second'))) is not None]
             if not times:
-                timing_warning='AtCoder 提交记录缺少时间，已确认 AC 按宽松规则处理';break
+                timing_warning='AtCoder 提交记录缺少时间，待核验';break
             next_cursor = int(max(times)) + 1
             if next_cursor <= cursor:
                 raise SyncError('提交分页无法继续')
@@ -419,9 +752,7 @@ def hydrate(remote, contest):
             raise SyncError('题目清单暂不可用')
         result = []
         for p in tasks:
-            difficulty = models.get(p['id'], {}).get('difficulty')
-            if difficulty is not None and difficulty < 400:
-                difficulty = 400 * math.exp((difficulty - 400)/400)
+            difficulty = normalize_difficulty('atcoder', models.get(p['id'], {}).get('difficulty'))
             result.append(relaxed_ac(problem(p['id'],p.get('problem_index',p['id']),p.get('name',p['title']),
                 contest.url+'/tasks/'+p['id'],difficulty,'AtCoder Problems',accepted.get(p['id'])),p['id'] in accepted and accepted[p['id']] is None))
         return result, timing_warning or ('' if observed else 'AtCoder 提交镜像未提供该时段记录，暂无法完整核验赛内 AC')
@@ -435,16 +766,32 @@ def hydrate(remote, contest):
         if not math.isfinite(duration) or duration<=0:raise SyncError('LeetCode 比赛时长无效')
         end=start+duration
         contest.ends_at=stamp(end)
-        rank = int(contest.source_data['rank']); target = max(1, math.ceil(rank/25)); accepted = None
-        for page in dict.fromkeys([target, max(1,target-1), target+1]):
+        scan = contest.source_data.get('ranking_scan', {})
+        rank = contest.source_data.get('rank')
+        hint_pages = scan.get('hint_pages', [])
+        if rank and not scan:
+            target = max(1, math.ceil(int(rank)/25))
+            hint_pages = list(dict.fromkeys([target, max(1, target-1), target+1]))
+        next_page = int(scan.get('next_page', 1))
+        pages = hint_pages or range(next_page, next_page+10)
+        accepted = None
+        for index, page in enumerate(pages):
+            contest.source_data['ranking_scan'] = {'hint_pages': hint_pages[index:]} if hint_pages else {'next_page': page}
             board = remote.json(host + f'/contest/api/ranking/{key}/?pagination={page}&region=global')
-            for i, row in enumerate(board.get('total_rank', [])):
+            if not isinstance(board.get('total_rank'), list) or not isinstance(board.get('submissions'), list):
+                raise SyncError('榜单暂不可读取，进度已保留，请重试')
+            for i, row in enumerate(board['total_rank']):
                 if row.get('user_slug', '').casefold() == user.casefold() and row.get('data_region') == region:
                     accepted = board['submissions'][i]; break
             if accepted is not None:
+                contest.source_data.pop('ranking_scan', None)
                 break
+            if not board['total_rank'] and not hint_pages:
+                contest.source_data.pop('ranking_scan', None)
+                raise SyncError('已查完正式榜单，未找到账号记录')
         if accepted is None:
-            raise SyncError('未能在正式榜单核验账号，暂不发放奖励')
+            contest.source_data['ranking_scan'] = {'next_page': 1 if hint_pages else pages[-1]+1}
+            raise ContinueHydration('榜单分批核验中')
         ratings = cache.get('lc-problem-ratings:v1')
         if ratings is None:
             try:
@@ -463,27 +810,30 @@ def hydrate(remote, contest):
             result.append(relaxed_ac(row, s.get('status') == 10 and t is None))
         return result, ''
     if platform == 'nowcoder':
-        result = []; page = 1; accepted = nowcoder_accepted(remote, account); ratings = nowcoder_ratings(remote)
+        problems = []; page = 1
         while True:
             d = remote.json(f'https://ac.nowcoder.com/acm/contest/problem-list?id={key}&page={page}')['data']
-            for p in d.get('data', []):
-                label = str(p.get('index', p.get('problemIndex', '')))
-                aliases = [f'contest/{contest.contest_key}/{label}', 'problem/'+str(p.get('problemId',''))]
-                found = [t for a in aliases for t in accepted.get(a,[])]
-                times = [t for t in found if t is not None and start <= t < end]
-                t = min(times) if times else None
-                row = problem(label, label, p.get('title', label), contest.url+'/'+label,
-                              ratings.get(str(p.get('problemId')),p.get('rating')), '牛客 Tracker Rating', t if t is not None and start <= t < end else None)
-                if found and not times:
-                    known_times=[value for value in found if value is not None]
-                    if any(value is None for value in found):relaxed_ac(row,True)
-                    elif known_times:row.update(accepted=True,official_ac=False,accepted_at=stamp(min(known_times)))
-                result.append(row)
+            problems.extend(d.get('data', []))
             if page >= d.get('basicInfo', {}).get('pageCount', 1):
                 break
             page += 1
-        if not result:
+        if not problems:
             raise SyncError('牛客题目清单暂不可公开读取')
+        accepted = nowcoder_accepted(remote, account)
+        ratings = nowcoder_ratings(remote)
+        result = []
+        for p in problems:
+            label = str(p.get('index', p.get('problemIndex', '')))
+            aliases = [f'contest/{contest.contest_key}/{label}', 'problem/'+str(p.get('problemId',''))]
+            found = [t for a in aliases for t in accepted.get(a,[])]
+            times = [t for t in found if t is not None and start <= t < end]
+            row = problem(label, label, p.get('title', label), contest.url+'/'+label,
+                          ratings.get(str(p.get('problemId')),p.get('rating')), '牛客 Tracker Rating', min(times) if times else None)
+            if found and not times:
+                known_times=[value for value in found if value is not None]
+                if any(value is None for value in found):relaxed_ac(row,True)
+                elif known_times:row.update(accepted=True,official_ac=False,accepted_at=stamp(min(known_times)))
+            result.append(row)
         return result, ''
     if platform == 'luogu':
         from .platform_sync import luogu
@@ -496,21 +846,48 @@ def hydrate(remote, contest):
         if not isinstance(practice.get('passed'), list):
             raise SyncError('洛谷公开 AC 清单暂不可读取')
         passed = {str(p.get('pid')) if isinstance(p, dict) else str(p) for p in practice['passed']}
-        known = {}; other_evidence={}
-        if cookie:
-            uid = profile['profile_url'].rstrip('/').rsplit('/',1)[-1]
-            try:known = luogu_ac_times(remote,uid,cookie,start,contest.contest_key,other_evidence,known)
-            except SyncError as exc:
-                logger.warning('Luogu timing unavailable; retaining proven AC fallback: %s',str(exc)[:160])
-                # Retain already verified records even if a later page failed.
         d = remote.json(contest.url, headers={'x-lentille-request':'content-only'})
         data = d.get('data', d.get('currentData', d))
+        problems = data.get('contestProblems', data.get('problems', []))
+        if not problems:
+            raise SyncError('洛谷题目清单暂不可公开读取')
+        known = {}; other_evidence = {}; warning = ''
+        saved_scan = contest.source_data.get('luogu_scan', {})
+        if cookie:
+            from .submission_evidence import EVIDENCE_MAX_AGE
+            uid = profile['profile_url'].rstrip('/').rsplit('/',1)[-1]
+            now = time.time()
+            max_age = EVIDENCE_MAX_AGE.total_seconds()
+            scope = [uid, start, end]
+            checkpoint = {'next_page': 1, 'observed_at': now, 'scope': scope}
+            if saved_scan.get('scope') == scope and now - saved_scan['observed_at'] <= max_age:
+                checkpoint.update(saved_scan)
+                known = {pid: list(times) for pid, times in saved_scan['known'].items()}
+                other_evidence = {pid: list(times) for pid, times in saved_scan['other_evidence'].items()}
+            first_page = checkpoint['next_page']
+            try:
+                known = scan_luogu_records(remote, uid, cookie, start, contest_key=contest.contest_key,
+                                           evidence=known, other_evidence=other_evidence, checkpoint=checkpoint,
+                                           problem_ids={row.get('problem', row)['pid'] for row in problems})
+            except SyncError as exc:
+                checkpoint['known'] = summarize_luogu_times(known, start, end)
+                checkpoint['other_evidence'] = summarize_luogu_times(other_evidence, start, end)
+                contest.source_data['luogu_scan'] = checkpoint
+                if checkpoint['next_page'] > first_page:
+                    raise ContinueHydration('洛谷提交记录分批核验中') from exc
+                warning = '洛谷提交记录暂未核验完整，已保留扫描进度：' + str(exc)
+            else:
+                contest.source_data.pop('luogu_scan', None)
+                if time.time() - checkpoint['observed_at'] > max_age:
+                    raise SyncError('洛谷提交记录核验已过期，请重新同步')
+        elif saved_scan:
+            warning = '洛谷查询 Cookie 暂不可用，已保留扫描进度'
         result = []
-        for i, row in enumerate(data.get('contestProblems', data.get('problems', []))):
+        for i, row in enumerate(problems):
             p = row.get('problem', row)
             evidence = known.get(p['pid'], [])
             outside_context=other_evidence.get(p['pid'],[])
-            inside = [t for t in evidence if t is not None and start <= t < end]
+            inside = [t for t in evidence + outside_context if t is not None and start <= t < end]
             row = problem(p['pid'], row.get('no') or str(i+1), p.get('title',p.get('name',p['pid'])), 'https://www.luogu.com.cn/problem/'+p['pid'],
                           p.get('difficulty') or None, '洛谷难度等级', min(inside) if inside else None)
             if not inside and evidence and all(t is not None for t in evidence):
@@ -520,7 +897,5 @@ def hydrate(remote, contest):
                 if known_outside:row.update(accepted=True,official_ac=False,accepted_at=stamp(min(known_outside)))
                 else:relaxed_ac(row,p['pid'] in passed or bool(evidence) or bool(outside_context))
             result.append(row)
-        if not result:
-            raise SyncError('洛谷题目清单暂不可公开读取')
-        return result, ''
+        return result, warning
     raise SyncError('不支持此平台')

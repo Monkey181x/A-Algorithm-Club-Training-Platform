@@ -41,6 +41,10 @@ def validate_account(platform, account):
     return account
 
 
+class CredentialError(SyncError):
+    pass
+
+
 class Remote:
     def __init__(self):
         self.session = requests.Session()
@@ -65,6 +69,13 @@ class Remote:
                     if urlparse(target).hostname == urlparse(url).hostname and urlparse(target).scheme == 'https':
                         response.close()
                         return self.text(target, headers=headers, redirects=redirects + 1, limit=limit)
+                if response.status_code in {401,403}:
+                    raise CredentialError(f'平台返回 HTTP {response.status_code}，请检查账号凭据或平台访问限制后重试')
+                if response.status_code == 429 or 500 <= response.status_code < 600:
+                    if _attempt < 2 and time.monotonic()+5 < self.deadline:
+                        response.close()
+                        time.sleep(2**_attempt)
+                        return self.text(url,payload=payload,headers=headers,redirects=redirects,limit=limit,_attempt=_attempt+1)
                 if response.status_code != 200:
                     raise SyncError(f'平台返回 HTTP {response.status_code}，账号可能不存在、凭据失效或访问受限')
                 chunks = []; size = 0

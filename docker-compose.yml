@@ -47,7 +47,8 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    command: celery -A config worker -l INFO --concurrency=1
+    command: celery -A config worker -l INFO --concurrency=2
+    stop_grace_period: 15m
     volumes:
       - media_data:/app/media
       - backup_data:/app/backups

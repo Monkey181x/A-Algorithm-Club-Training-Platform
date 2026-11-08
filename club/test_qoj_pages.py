@@ -83,10 +83,14 @@ class QojPageTests(SimpleTestCase):
         binding = Mock(platform='qoj', account='reader', sync_state={'phase': 'records', 'page': 1})
         with patch('club.platform_records.PlatformBinding.objects') as manager, \
                 patch('club.platform_records.Remote') as remote_class, \
-                patch('club.platform_records.attach'), patch('club.platform_records.store') as store:
+                patch('club.platform_records.attach'), patch('club.platform_records.store') as store, \
+                patch('club.platform_records.transaction.atomic'), patch('club.platform_records.transaction.on_commit') as scheduled:
             manager.filter.return_value.first.return_value = binding
+            manager.select_for_update.return_value.filter.return_value.first.return_value = binding
             remote_class.return_value.text.return_value = '<table><tr><td>unknown page</td></tr></table>'
             remote_class.return_value.credentials = {'cookie': '__Host-UOJSESSID=fixture'}
             run_step(1, 'fixture-token')
             store.assert_not_called()
-            self.assertEqual(manager.filter.return_value.update.call_args.kwargs['status'], 'failed')
+            self.assertEqual(binding.sync_state['retries'],1)
+            self.assertEqual(binding.sync_state['page'],1)
+            scheduled.assert_called_once()

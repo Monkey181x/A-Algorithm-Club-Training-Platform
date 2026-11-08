@@ -15,10 +15,12 @@ from .views import api_login_required, api_error, body
 
 def start(binding, full=False):
     prior = binding.sync_state or {}
-    resumable = prior.get('phase') == 'records' and binding.status == 'failed' and not full
+    resumable = prior.get('phase') == 'records' and (binding.status == 'failed' or binding.status == 'pending' and binding.requested_at < timezone.now()-timedelta(minutes=5)) and not full
     binding.sync_state = dict(prior, version=2) if resumable else {
         'version': 2, 'phase': 'profile', 'full': full or not prior.get('complete'),
         'cursor': prior.get('cursor', 0), 'pages': 0, 'count': binding.solved_records.count()}
+    binding.sync_state.pop('retries', None)
+    binding.sync_state.pop('retry_at', None)
     binding.sync_token = uuid.uuid4()
     binding.requested_at = timezone.now()
     binding.status = 'pending'
@@ -110,10 +112,9 @@ def sync(request):
         bindings = list(PlatformBinding.objects.select_for_update().filter(user=request.user, pk__in=ids))
         if len(bindings) != len(set(ids)):
             return api_error('账号不存在', 404)
-        if any(b.status == 'pending' and b.requested_at > timezone.now() - timedelta(minutes=5) for b in bindings):
-            return api_error('正在同步', 409)
-        if any(b.requested_at > timezone.now() - timedelta(seconds=60) for b in bindings):
+        idle = [b for b in bindings if not (b.status == 'pending' and b.requested_at > timezone.now()-timedelta(minutes=5))]
+        if any(b.requested_at > timezone.now()-timedelta(seconds=60) for b in idle):
             return api_error('请稍后再同步', 429)
-        for binding in bindings:
+        for binding in idle:
             start(binding, data.get('full') is True)
     return JsonResponse({'bindings': [serialize_binding(b) for b in bindings]}, status=202)

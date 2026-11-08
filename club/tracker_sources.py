@@ -7,6 +7,8 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from .platform_sync import SyncError
+from .public_catalog import PublicRemote
+from .problem_difficulty import normalize as normalize_difficulty
 
 KINDS = {'icpc': 'qoj', 'codeforces': 'codeforces', 'atcoder': 'atcoder', 'nowcoder': 'nowcoder'}
 
@@ -34,6 +36,7 @@ def safe_url(value,base,hosts):
 
 def fetch(kind,remote,state):
     """Return one bounded batch, continuation state, and completion flag."""
+    remote = PublicRemote(remote)
     state=dict(state)
     if kind=='codeforces':
         a=remote.json('https://codeforces.com/api/contest.list?gym=false')
@@ -62,7 +65,7 @@ def fetch(kind,remote,state):
             if cid not in items or pid not in details:
                 continue
             p=details[pid];raw=models.get(pid,{}).get('difficulty')
-            difficulty=round(400*math.exp((raw-400)/400)) if isinstance(raw,(int,float)) and raw<400 else raw
+            difficulty=normalize_difficulty('atcoder', raw)
             items[cid]['problems'].append(problem(pid,p.get('problem_index',pid),p['title'],f'https://atcoder.jp/contests/{cid}/tasks/{pid}',difficulty))
         return list(items.values()),state,True
     if kind=='nowcoder':
@@ -124,7 +127,7 @@ def parse_nowcoder(paper):
         practice=re.search(r'/practice/([0-9a-fA-F]{32})',url)
         if practice:aliases.extend([practice[1].lower(),'practice/'+practice[1].lower()])
         item['problems'].append(problem(key,label,p.get('title',p.get('questionTitle',p.get('name',label))),url,
-                                        p.get('difficulty',p.get('difficultyScore',p.get('rating'))),aliases=aliases))
+                                        normalize_difficulty('nowcoder',p.get('difficulty',p.get('difficultyScore',p.get('rating')))),aliases=aliases,difficulty_source='牛客题目难度'))
     return item
 
 

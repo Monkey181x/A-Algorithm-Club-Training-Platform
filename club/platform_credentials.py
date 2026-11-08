@@ -47,14 +47,8 @@ def prepare_request(remote, url, headers):
     expected = {'codeforces': {'codeforces.com'}, 'qoj': {'qoj.ac'},
                 'nowcoder': {'ac.nowcoder.com', 'www.nowcoder.com'},
                 'leetcode': {'leetcode.cn'} if credentials.get('china') else {'leetcode.com'}}
-    if host in {'codeforces.com', 'kenkoooo.com'}:
-        from django.core.cache import caches
-        gate = caches['platform_requests']
-        gap = 3 if host == 'codeforces.com' else 2
-        while not gate.add('request:' + host, True, timeout=gap):
-            if time.monotonic() >= remote.deadline:
-                raise SyncError('同步超时，请重试')
-            time.sleep(.15)
+    from .platform_limits import wait_for_slot
+    wait_for_slot(host, remote.deadline)
     if host not in expected.get(platform, set()):
         return url, headers
     if credentials.get('cookie'):

@@ -44,13 +44,14 @@ def _baseline_evidence(user_ids):
     from datetime import date
     from .models import PlatformSolvedBaseline, ContestProblemProgress
     from .platform_solved import contest_key, problem_url
+    from .ac_evidence import ACEvidence
+    evidence = ACEvidence(user_ids)
     today = timezone.localdate()
     items = defaultdict(dict)
     unknown = defaultdict(int)
     baseline_unknown = {}
     baselines = {(b.binding.user_id,b.binding.platform):b for b in
-        PlatformSolvedBaseline.objects.filter(binding__user_id__in=user_ids,total__isnull=False,
-            captured_at__isnull=False).select_related('binding')}
+        evidence.baselines().filter(total__isnull=False, captured_at__isnull=False)}
     def covered(uid,source,key):
         return source=='contest' and (uid,key.split(':',1)[0]) in baselines
     def add(uid,key,day=None,**meta):
@@ -86,7 +87,7 @@ def _baseline_evidence(user_ids):
             add(uid,('platform',platform+':'+key),day,title=key,
                 url=problem_url(platform,key,base.binding.account),source=platform+' · 绑定时过题')
     bindings=set(PlatformBinding.objects.filter(user_id__in=user_ids).values_list('user_id','platform','account'))
-    for row in ContestProblemProgress.objects.filter(participation__user_id__in=user_ids,accepted=True).select_related('participation'):
+    for row in evidence.contests():
         c=row.participation
         if c.source_data.get('demo') or (c.user_id,c.platform,c.account) not in bindings:
             continue
@@ -132,14 +133,8 @@ def solved_evidence(user_ids):
         if binding.platform=='leetcode':
             leetcode_regions[binding.user_id].add('cn' if binding.account.startswith('cn:') else 'us')
     today=timezone.localdate()
-    nc_aliases={}
-    catalog=TrackerCatalog.objects.filter(kind='nowcoder').first()
-    if catalog:
-        for event in catalog.contests:
-            for p in event['problems']:
-                aliases=[p['key']]+p.get('aliases',[])
-                canonical=next((key for key in aliases if key.startswith('problem/')),p['key'])
-                for key in aliases:nc_aliases[key.lower()]=canonical.lower()
+    from .ac_evidence import metadata, canonical, ACEvidence
+    nc_aliases=metadata('nowcoder')
     def identity(platform,key,uid=None):
         prefix=platform
         if platform=='leetcode':
@@ -147,24 +142,25 @@ def solved_evidence(user_ids):
             # Current bindings govern both old credits and live evidence. When
             # both regions are bound, share identities and keep the larger floor.
             prefix='leetcode_'+next(iter(regions)) if len(regions)==1 else 'leetcode'
-        if platform=='nowcoder':key=nc_aliases.get(key.lower(),key)
+        if platform=='nowcoder':key=canonical(platform,key,nc_aliases)
         return prefix+':'+key.lower()
     def add(uid,key,day=None,title='',url='',source=''):
         if not key or uid not in modern or day and day>today:return
         old=items[uid].get(key)
         if old is None or day and (old['date'] is None or day<old['date']):
             items[uid][key]={'date':day,'title':title or key,'url':url,'source':source}
-    for row in PlatformSolvedRecord.objects.filter(binding__user_id__in=modern).select_related('binding'):
+    evidence=ACEvidence(modern)
+    for row in evidence.records():
         b=row.binding
         add(b.user_id,identity(b.platform,row.problem_key,b.user_id),row.solved_on,row.title,row.url,b.platform)
-    baselines = list(PlatformSolvedBaseline.objects.filter(binding__user_id__in=modern).select_related('binding'))
+    baselines = list(evidence.baselines())
     for base in baselines:
         b=base.binding
         for key in set(base.problem_ids)|set(base.dated_problems):
             try:day=date.fromisoformat(base.dated_problems[key]) if key in base.dated_problems else None
             except (TypeError,ValueError):day=None
             add(b.user_id,identity(b.platform,key,b.user_id),day,key,problem_url(b.platform,key,b.account),b.platform)
-    progress=list(ContestProblemProgress.objects.filter(participation__user_id__in=modern,accepted=True).select_related('participation'))
+    progress=list(evidence.contests(bound_only=False))
     historical_aliases={}
     for row in progress:
         c=row.participation

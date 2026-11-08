@@ -13,17 +13,8 @@ from .views import api_login_required, api_error, membership_for
 
 
 def accepted_keys(user,kind,binding_id=None):
-    bindings=PlatformBinding.objects.filter(user=user,platform=KINDS[kind])
-    if binding_id:bindings=bindings.filter(pk=binding_id)
-    accounts=set(bindings.values_list('account',flat=True))
-    keys=set(PlatformSolvedRecord.objects.filter(binding__in=bindings).values_list('problem_key',flat=True))
-    for base in PlatformSolvedBaseline.objects.filter(binding__in=bindings):
-        keys.update(base.problem_ids)
-    from .platform_solved import contest_key
-    for row in ContestProblemProgress.objects.filter(participation__user=user,participation__platform=KINDS[kind],participation__account__in=accounts,accepted=True).select_related('participation'):
-        if not row.participation.source_data.get('demo'):
-            keys.add(contest_key(row))
-    return {key.lower() for key in keys}
+    from .ac_evidence import ACEvidence
+    return ACEvidence([user.pk], platform=KINDS[kind], binding_id=binding_id).accepted_keys()
 
 
 def queue_refresh(kind,force=False):
@@ -77,7 +68,7 @@ def tracker(request,kind,refresh=False):
     keys=accepted_keys(request.user,kind,binding_id)
     from .platform_rewards import available_rewards,namespace,canonical,metadata
     reward_map=available_rewards(membership_for(request),KINDS[kind],binding_id or None)
-    reward_info=metadata(KINDS[kind]) if reward_map else {}
+    reward_info=metadata(KINDS[kind])
     filtered_rewards=set()
     items=[];all_items=catalog.contests if catalog else []
     query=request.GET.get('q','').strip().casefold()
@@ -89,10 +80,14 @@ def tracker(request,kind,refresh=False):
         ratings = {p['label']:p for p in source['problems']}
         for source_problem in actual_problems:
             p = dict(source_problem)
+            if kind != 'icpc':
+                info = reward_info.get(p['key'].lower(), {})
+                for field in ('difficulty', 'difficulty_source', 'difficulty_updated_at', 'difficulty_known'):
+                    if field in info:p[field] = info[field]
             for field in ('tier','difficulty_source','accepted_teams','total_teams'):
-                if field in ratings.get(p['label'],{}):
+                if (kind == 'icpc' or field != 'difficulty_source') and field in ratings.get(p['label'],{}):
                     p[field] = ratings[p['label']][field]
-            problems.append(dict(p,accepted=bool(keys.intersection([p['key']]+p.get('aliases',[])))))
+            problems.append(dict(p,accepted=bool(keys.intersection(canonical(KINDS[kind],key,reward_info) for key in [p['key']]+p.get('aliases',[])))))
             ns=KINDS[kind]
             reward_key=ns+'|'+canonical(ns,p['key'],reward_info)
             reward=reward_map.get(reward_key)
