@@ -3,7 +3,7 @@ from datetime import timedelta
 from celery import shared_task
 from django.db import transaction
 from django.core.exceptions import ValidationError
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from .models import CleanupJob, Semester, FileDeletion, Problem
@@ -171,7 +171,7 @@ def discover_contest_progress(user_id, token, contest_url=None):
     from .contest_progress_sources import discover, linked_contest, parse_contest_url, Remote, SyncError
     if not _contest_sync_is_current(user_id,token):
         return
-    pending = []
+    pending = set()
     messages = {}
     has_errors = False
     for binding in PlatformBinding.objects.filter(user_id=user_id):
@@ -209,7 +209,7 @@ def discover_contest_progress(user_id, token, contest_url=None):
                             row['source_data'] = {**{k:v for k,v in existing.source_data.items() if k in ('rank','ranking_scan')}, **row.get('source_data', {})}
                     c, _ = ContestParticipation.objects.update_or_create(user_id=user_id, platform=binding.platform,
                         account=binding.account, contest_key=key, defaults=row)
-                    pending.append(c.pk)
+                    pending.add(c.pk)
             messages[binding.platform] = f'已获取 {len(rows)} 场参赛记录' + ('；'+rows.warning if getattr(rows, 'warning', '') else '')
             has_errors = has_errors or bool(getattr(rows, 'warning', ''))
         except Exception as exc:
@@ -221,7 +221,17 @@ def discover_contest_progress(user_id, token, contest_url=None):
         state = _lock_contest_sync_state(user_id,token)
         if not state:
             return
-        state.progressed_at=timezone.now()
+        now = timezone.now()
+        if not contest_url and state.auto_token == state.token:
+            from .contest_rewards import REWARD_START
+            current_binding = PlatformBinding.objects.filter(
+                user_id=user_id, platform=OuterRef('platform'), account=OuterRef('account'),
+            ).exclude(platform='qoj')
+            saved = ContestParticipation.objects.filter(
+                Exists(current_binding), user_id=user_id, starts_at__gte=REWARD_START, ends_at__lte=now,
+            ).exclude(detail_complete=True, sync_error='')
+            pending.update(saved.values_list('pk', flat=True))
+        state.progressed_at = now
         state.messages = messages; state.total = state.remaining = len(pending)
         state.has_errors = has_errors
         state.status = 'pending'; state.finished_at = None

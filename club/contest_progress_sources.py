@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 from bs4 import BeautifulSoup
-from django.core.cache import cache
+from django.core.cache import cache, caches
 from .platform_sync import Remote, SyncError
 from .public_catalog import PublicRemote
 from .problem_difficulty import normalize as normalize_difficulty
@@ -34,6 +34,8 @@ logger=logging.getLogger(__name__)
 
 _cf_lock = threading.Lock()
 _cf_last = 0.0
+_ATCODER_DISCOVERY_PAGE_LIMIT = 24
+_ATCODER_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
 
 
 def time_value(value):
@@ -175,26 +177,58 @@ def discover(remote, platform, account):
             c=contests.get(row.contest_key)
             if c and c['start_epoch_second'] <= row.submitted_at.timestamp() < c['start_epoch_second']+c['duration_second']:
                 keys.add(row.contest_key)
-        cursor = covered_until or int(REWARD_START.timestamp())
-        while True:
-            rows = remote.json(f'https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions?user={user}&from_second={cursor}')
-            if not isinstance(rows, list):
-                raise SyncError('AtCoder 提交历史暂不可用')
-            keys.update(r.get('contest_id') for r in rows
-                        if r.get('user_id', account).casefold() == account.casefold()
-                        and (c := contests.get(r.get('contest_id')))
-                        and (t := time_value(r.get('epoch_second'))) is not None
-                        and c['start_epoch_second'] <= t < c['start_epoch_second'] + c['duration_second'])
+        cutoff = int(REWARD_START.timestamp())
+        cursor = covered_until or cutoff
+        user_id = getattr(remote, 'evidence_user_id', None)
+        checkpoint_cache = caches['platform_requests'] if type(user_id) is int else None
+        checkpoint_key = f'atcoder-discovery:v1:{user_id}:{user}:{cutoff}'
+        scanned_keys = set()
+        if checkpoint_cache is not None:
+            checkpoint = checkpoint_cache.get(checkpoint_key)
+            if checkpoint:
+                cursor = max(cursor, checkpoint['cursor'])
+                scanned_keys.update(checkpoint['keys'])
+
+        warning = 'AtCoder 提交历史尚未扫完，已保留发现的比赛，下次同步将继续'
+        deadline = getattr(remote, 'deadline', None)
+        for page in range(_ATCODER_DISCOVERY_PAGE_LIMIT):
+            if page:
+                if isinstance(deadline, (int, float)) and time.monotonic() + 3.1 >= deadline:
+                    break
+                time.sleep(3.1)
+            try:
+                rows = remote.json(f'https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions?user={user}&from_second={cursor}')
+                if not isinstance(rows, list):
+                    raise SyncError('AtCoder 提交历史暂不可用')
+            except SyncError as exc:
+                warning = 'AtCoder 提交历史获取不完整，已保留发现的比赛：' + str(exc)
+                break
+            scanned_keys.update(r.get('contest_id') for r in rows
+                                if r.get('user_id', account).casefold() == account.casefold()
+                                and (c := contests.get(r.get('contest_id')))
+                                and (t := time_value(r.get('epoch_second'))) is not None
+                                and c['start_epoch_second'] <= t < c['start_epoch_second'] + c['duration_second'])
             if len(rows) < 500:
+                warning = ''
                 break
             times = [t for r in rows if (t := time_value(r.get('epoch_second'))) is not None]
             if not times or int(max(times)) + 1 <= cursor:
-                raise SyncError('AtCoder 提交分页无法继续')
+                warning = 'AtCoder 提交分页无法继续，已保留发现的比赛'
+                break
             cursor = int(max(times)) + 1
-            time.sleep(3.1)
-        return [header(c['id'], c['title'], 'https://atcoder.jp/contests/' + c['id'],
-                       c['start_epoch_second'], c['start_epoch_second'] + c['duration_second'])
-                for key in sorted(keys - {None}) if (c := contests.get(key))]
+
+        if checkpoint_cache is not None:
+            if warning:
+                checkpoint_cache.set(checkpoint_key, {'cursor': cursor, 'keys': sorted(scanned_keys)},
+                                     _ATCODER_DISCOVERY_CHECKPOINT_TTL)
+            else:
+                checkpoint_cache.delete(checkpoint_key)
+        return DiscoveryRows(
+            [header(c['id'], c['title'], 'https://atcoder.jp/contests/' + c['id'],
+                    c['start_epoch_second'], c['start_epoch_second'] + c['duration_second'])
+             for key in sorted((keys | scanned_keys) - {None}) if (c := contests.get(key))],
+            warning,
+        )
     if platform == 'leetcode':
         host, user, region = lc_host(account)
         arg = 'userSlug' if region == 'CN' else 'username'
