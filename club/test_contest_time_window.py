@@ -117,6 +117,7 @@ class RecoveryTests(SimpleTestCase):
         self.assertEqual(pages, [*range(1, 17), *range(16, 81)])
 
     def test_leetcode_batches_reach_page_101_and_resume_failed_page(self):
+        from django.core.cache.backends.locmem import LocMemCache
         from .contest_progress_sources import ContinueHydration, SyncError
         c=NS(platform='leetcode',account='reader',contest_key='weekly-contest-1',starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=1),source_data={'manual':True})
         remote=Mock(); failed=[False]; pages=[]
@@ -127,7 +128,10 @@ class RecoveryTests(SimpleTestCase):
                 failed[0]=True; raise SyncError('temporary failure')
             return {'total_rank':[{'user_slug':'reader' if page==101 else 'other','data_region':'US'}],'submissions':[{}]}
         remote.json.side_effect=response
-        with patch('club.contest_progress_sources.cache.get',return_value={}):
+        backend = LocMemCache(self.id(), {})
+        self.addCleanup(backend.clear)
+        with patch('club.contest_progress_sources.cache.get', return_value={}), \
+             patch('club.public_catalog.cache', backend):
             for _ in range(13):
                 try:
                     rows,error=hydrate(remote,c)
