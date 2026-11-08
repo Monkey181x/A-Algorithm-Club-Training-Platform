@@ -165,29 +165,40 @@ def fail_contest_sync(user_id, token, message, *, stale_before=None):
 
 
 @shared_task(soft_time_limit=750, time_limit=780)
-def discover_contest_progress(user_id, token, contest_url=None):
+def discover_contest_progress(user_id, token, contest_url=None, *, resume_bindings=None, pending_ids=()):
     from django.db import transaction
-    from .models import ContestParticipation, PlatformBinding
-    from .contest_progress_sources import discover, linked_contest, parse_contest_url, Remote, SyncError
+    from .models import ContestParticipation, ContestSyncState, PlatformBinding
+    from .contest_progress_sources import contest_link_bindings, discover, linked_contest, parse_contest_url, Remote, SyncError
     if not _contest_sync_is_current(user_id,token):
         return
-    pending = set()
+    pending = set(pending_ids)
     messages = {}
     has_errors = False
-    for binding in PlatformBinding.objects.filter(user_id=user_id):
+    bindings = PlatformBinding.objects.filter(user_id=user_id).exclude(platform='qoj')
+    if contest_url:
+        platform, _, host = parse_contest_url(contest_url)
+        bindings = contest_link_bindings(bindings, platform, host)
+        if not bindings.exists():
+            fail_contest_sync(user_id, token, '请先绑定与比赛链接对应的平台或地区账号')
+            return
+    if resume_bindings is not None:
+        state = ContestSyncState.objects.filter(user_id=user_id, token=token, status='pending', total=0).first()
+        if state is None:
+            return
+        bindings = bindings.filter(pk__in=resume_bindings)
+        messages = state.messages
+        has_errors = state.has_errors
+    deferred = []
+    for binding in bindings:
         if not _contest_sync_is_current(user_id,token):
             return
-        if contest_url and binding.platform != parse_contest_url(contest_url)[0]:
-            continue
-        if binding.platform == 'qoj':
-            continue
         remote = Remote()
         remote.evidence_user_id = user_id
         try:
             rows = [linked_contest(remote, contest_url, binding.account)] if contest_url else discover(remote, binding.platform, binding.account)
             with transaction.atomic():
                 state = _lock_contest_sync_state(user_id,token)
-                if not state:
+                if not state or (resume_bindings is not None and state.total):
                     return
                 if not PlatformBinding.objects.filter(pk=binding.pk, account=binding.account).exists():
                     continue
@@ -212,7 +223,10 @@ def discover_contest_progress(user_id, token, contest_url=None):
                         account=binding.account, contest_key=key, defaults=row)
                     pending.add(c.pk)
             messages[binding.platform] = f'已获取 {len(rows)} 场参赛记录' + ('；'+rows.warning if getattr(rows, 'warning', '') else '')
-            has_errors = has_errors or bool(getattr(rows, 'warning', ''))
+            if getattr(rows, 'more', False):
+                deferred.append(binding.pk)
+            else:
+                has_errors = has_errors or bool(getattr(rows, 'warning', ''))
         except Exception as exc:
             has_errors = True
             messages[binding.platform] = str(exc)[:240] if isinstance(exc, SyncError) else '比赛历史同步失败，保留已有记录'
@@ -220,9 +234,26 @@ def discover_contest_progress(user_id, token, contest_url=None):
             remote.session.close()
     with transaction.atomic():
         state = _lock_contest_sync_state(user_id,token)
-        if not state:
+        if not state or (resume_bindings is not None and state.total):
             return
         now = timezone.now()
+        if deferred:
+            state.progressed_at = now
+            state.messages = messages
+            state.has_errors = has_errors
+            state.save(update_fields=['progressed_at', 'messages', 'has_errors'])
+            priority = 8 if state.auto_token == state.token else 5
+
+            def resume():
+                try:
+                    discover_contest_progress.apply_async(
+                        args=[user_id, token], kwargs={'resume_bindings': deferred, 'pending_ids': sorted(pending)},
+                        priority=priority, retry=False)
+                except Exception:
+                    fail_contest_sync(user_id, token, '比赛续扫任务未能入队，已有进度已保留')
+
+            transaction.on_commit(resume)
+            return
         if not contest_url and state.auto_token == state.token:
             from .contest_rewards import REWARD_START
             current_binding = PlatformBinding.objects.filter(

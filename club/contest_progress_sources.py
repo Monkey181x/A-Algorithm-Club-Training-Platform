@@ -24,9 +24,10 @@ from .public_catalog import PublicRemote, release_cache_lock
 from .problem_difficulty import normalize as normalize_difficulty
 
 class DiscoveryRows(list):
-    def __init__(self, rows, warning=''):
+    def __init__(self, rows, warning='', *, more=False):
         super().__init__(rows)
         self.warning = warning
+        self.more = more
 
 
 class ContinueHydration(SyncError):
@@ -51,6 +52,10 @@ _LUOGU_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
 _NOWCODER_AC_PAGE_LIMIT = 15
 _NOWCODER_AC_SCAN_SECONDS = 45
 _NOWCODER_RATING_RESERVE_SECONDS = 45
+_NOWCODER_DISCOVERY_PAGE_LIMIT = 15
+_NOWCODER_DISCOVERY_SCAN_SECONDS = 45
+_NOWCODER_DISCOVERY_METADATA_LIMIT = 45
+_NOWCODER_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
 
 
 def time_value(value):
@@ -116,6 +121,15 @@ def parse_contest_url(url):
     if not match:
         raise ValueError('不支持的比赛链接（QOJ 保持普通过题奖励）')
     return platform, match[1], parsed.hostname
+
+
+def contest_link_bindings(bindings, platform, host):
+    bindings = bindings.filter(platform=platform)
+    if platform == 'leetcode':
+        if host == 'leetcode.cn':
+            return bindings.filter(account__startswith='cn:')
+        return bindings.exclude(account__startswith='cn:')
+    return bindings
 
 
 def linked_contest(remote, url, account):
@@ -266,33 +280,7 @@ def discover(remote, platform, account):
                                  {'rank': r['ranking']}))
         return result
     if platform == 'nowcoder':
-        history = remote.json('https://ac.nowcoder.com/acm/contest/rating-history?uid=' + user)
-        rating_rows = history.get('data', [])
-        if isinstance(rating_rows, dict):
-            rating_rows = next((rating_rows[k] for k in ['list','records','ratingHistory','ratingList'] if isinstance(rating_rows.get(k),list)), [])
-        keys = {str(r.get('contestId',r.get('contest_id',r.get('id','')))) for r in rating_rows}
-        keys.discard(''); page = 1; seen_pages = set()
-        while True:
-            html = remote.text(f'https://ac.nowcoder.com/acm/contest/profile/{user}/join-index?page={page}')
-            soup = BeautifulSoup(html, 'html.parser')
-            found = set(re.findall(r'/acm/contest/(\d+)(?:["/?#]|$)', str(soup.select('table'))))
-            signature = tuple(sorted(found))
-            if not found or signature in seen_pages:
-                break
-            seen_pages.add(signature)
-            keys |= found
-            if not soup.select('a[rel="next"]') and not any(a.get_text(strip=True) in ['下一页', '>'] for a in soup.select('.pagination a')):
-                break
-            page += 1
-        result = []
-        for key in keys:
-            c = remote.json('https://ac.nowcoder.com/acm/contest/contest-info?id=' + key).get('data') or {}
-            if c.get('startTime') and c.get('endTime'):
-                result.append(header(key, c['name'], 'https://ac.nowcoder.com/acm/contest/' + key,
-                                     c['startTime']/1000, c['endTime']/1000))
-        if not keys and 'curUser' not in html and history.get('code') != 0:
-            raise SyncError('牛客参赛历史暂不可公开读取')
-        return result
+        return discover_nowcoder(remote, user)
     if platform == 'luogu':
         from .platform_sync import luogu
         try:cookie = configure_luogu(remote)
@@ -352,6 +340,85 @@ def discover(remote, platform, account):
                 checkpoint_cache.delete(checkpoint_key)
         return DiscoveryRows([row.copy() for row in checked_headers.values() if row is not None], discovery_warning)
     raise SyncError('不支持此平台')
+
+
+def discover_nowcoder(remote, user):
+    user_id = getattr(remote, 'evidence_user_id', None)
+    backend = caches['platform_requests'] if type(user_id) is int else None
+    cache_key = f'nowcoder-discovery:v1:{user_id}:{user}'
+    checkpoint = backend.get(cache_key) if backend is not None else None
+    if checkpoint is None:
+        history = remote.json('https://ac.nowcoder.com/acm/contest/rating-history?uid=' + user)
+        rating_rows = history.get('data', [])
+        if isinstance(rating_rows, dict):
+            rating_rows = next((rating_rows[k] for k in ('list', 'records', 'ratingHistory', 'ratingList')
+                                if isinstance(rating_rows.get(k), list)), [])
+        rated_keys = {str(r.get('contestId', r.get('contest_id', r.get('id', '')))) for r in rating_rows} - {''}
+        checkpoint = {'next_page': 1, 'history_available': history.get('code') == 0,
+                      'seen': set(), 'headers': {}, 'pending_keys': sorted(rated_keys)}
+
+    queued = checkpoint['pending_keys']
+    headers = checkpoint['headers']
+    known = set(queued) | headers.keys()
+    seen = checkpoint['seen']
+    first_page = checkpoint['next_page']
+    scan_error = ''
+    if first_page is not None:
+        try:
+            with request_budget(remote, _NOWCODER_DISCOVERY_SCAN_SECONDS, _NOWCODER_RATING_RESERVE_SECONDS):
+                for page in range(first_page, first_page + _NOWCODER_DISCOVERY_PAGE_LIMIT):
+                    html = remote.text(f'https://ac.nowcoder.com/acm/contest/profile/{user}/join-index?page={page}')
+                    soup = BeautifulSoup(html, 'html.parser')
+                    found = set(re.findall(r'/acm/contest/(\d+)(?:["/?#]|$)', str(soup.select('table'))))
+                    signature = tuple(sorted(found))
+                    if not found and not known and 'curUser' not in html and not checkpoint['history_available']:
+                        raise SyncError('牛客参赛历史暂不可公开读取')
+                    if signature in seen:
+                        raise SyncError('牛客参赛历史分页未能继续')
+                    queued.extend(sorted(found - known))
+                    known.update(found)
+                    has_next = soup.select('a[rel="next"]') or any(
+                        a.get_text(strip=True) in ['下一页', '>'] for a in soup.select('.pagination a'))
+                    if not found or not has_next:
+                        checkpoint['next_page'] = None
+                        break
+                    seen.add(signature)
+                    checkpoint['next_page'] = page + 1
+        except SyncError as exc:
+            scan_error = str(exc)
+
+    failed = []
+    attempted = 0
+    checked = len(headers)
+    deadline = getattr(remote, 'deadline', None)
+    for key in queued[:_NOWCODER_DISCOVERY_METADATA_LIMIT]:
+        if isinstance(deadline, (int, float)) and time.monotonic() >= deadline:
+            break
+        attempted += 1
+        try:
+            c = remote.json('https://ac.nowcoder.com/acm/contest/contest-info?id=' + key).get('data') or {}
+        except SyncError:
+            failed.append(key)
+            continue
+        headers[key] = None
+        if c.get('startTime') and c.get('endTime'):
+            headers[key] = header(key, c['name'], 'https://ac.nowcoder.com/acm/contest/' + key,
+                                  c['startTime']/1000, c['endTime']/1000)
+    checkpoint['pending_keys'] = queued[attempted:] + failed
+    incomplete = checkpoint['next_page'] is not None or bool(checkpoint['pending_keys'])
+    warning = ''
+    if incomplete:
+        warning = '牛客参赛历史尚未同步完整，已保留进度'
+        if scan_error:
+            warning += '：' + scan_error
+    if backend is not None:
+        if incomplete:
+            backend.set(cache_key, checkpoint, _NOWCODER_DISCOVERY_CHECKPOINT_TTL)
+        else:
+            backend.delete(cache_key)
+    advanced = checkpoint['next_page'] != first_page or len(headers) > checked
+    return DiscoveryRows([row.copy() for row in headers.values() if row is not None], warning,
+                         more=backend is not None and incomplete and advanced)
 
 
 def problem(key, label, title, url, difficulty=None, source='', ac=None):

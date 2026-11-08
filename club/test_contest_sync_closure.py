@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.db import close_old_connections
 from django.test import TransactionTestCase
@@ -54,6 +54,104 @@ class ContestSyncClosureTests(TransactionTestCase):
         self.contest.refresh_from_db()
         self.assertEqual(self.contest.source_data['rank'],9999)
         self.assertEqual(self.contest.source_data['ranking_scan']['next_page'],101)
+
+    def test_leetcode_link_uses_only_the_matching_region(self):
+        self.binding.platform = 'leetcode'
+        self.binding.account = 'reader'
+        self.binding.save()
+        url = 'https://leetcode.cn/contest/weekly-contest-1/'
+        self.client.force_login(self.author)
+        response = self.client.post('/api/contests/progress', {'contest_url': url}, content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        PlatformBinding.objects.create(user=self.author, platform='leetcode', account='cn:reader')
+        with patch('club.contest_progress_sources.linked_contest', return_value=self.discovered_rows()[0]) as linked, \
+             patch('club.tasks.enqueue_hydration') as enqueue:
+            discover_contest_progress(self.author.pk, self.token, url)
+        self.assertEqual(linked.call_args.args[1:], (url, 'cn:reader'))
+        linked.assert_called_once()
+        participation = ContestParticipation.objects.get(platform='leetcode', user=self.author)
+        self.assertEqual(participation.account, 'cn:reader')
+        enqueue.assert_called_once_with(participation.pk, self.token)
+        with patch('club.contest_progress_sources.hydrate', return_value=([], '')):
+            hydrate_contest_progress(participation.pk, self.token)
+        self.state.refresh_from_db()
+        self.assertEqual(self.state.status, 'ready')
+        self.assertFalse(self.state.has_errors)
+
+    def test_nowcoder_long_history_requeues_in_background_and_keeps_other_results(self):
+        from urllib.parse import parse_qs, urlsplit
+        from django.core.cache.backends.locmem import LocMemCache
+        from .contest_progress_sources import discover
+        from .platform_sync import SyncError
+
+        binding = PlatformBinding.objects.create(user=self.author, platform='nowcoder', account='9')
+        self.state.total = self.state.remaining = 0
+        self.state.save(update_fields=['total', 'remaining'])
+        backend = LocMemCache(self.id(), {})
+        self.addCleanup(backend.clear)
+        clock = 0
+        pages = []
+        metadata = []
+        rated_requests = 0
+        remote = Mock(deadline=140)
+        batches = []
+
+        def history(url):
+            nonlocal clock
+            self.assertLess(clock, remote.deadline)
+            self.assertLessEqual(remote.deadline, 47)
+            clock += 2
+            page = int(parse_qs(urlsplit(url).query)['page'][0])
+            pages.append(page)
+            if page == 18 and pages.count(18) == 1:
+                raise SyncError('temporary interruption')
+            next_link = '<a rel="next" href="?page=2">Next</a>' if page < 80 else ''
+            return f'<table><tr><td><a href="/acm/contest/{page}">Contest</a></td></tr></table>{next_link}'
+
+        def contest_info(url, **kwargs):
+            nonlocal clock, rated_requests
+            self.assertEqual(remote.deadline, 140)
+            self.assertLess(clock, remote.deadline)
+            clock += 2
+            if '/rating-history' in url:
+                rated_requests += 1
+                return {'code': 0, 'data': [{'contestId': 100}]}
+            key = int(url.rsplit('=', 1)[1])
+            metadata.append(key)
+            if key == 1 and metadata.count(1) == 1:
+                raise SyncError('temporary metadata failure')
+            return {'data': {'name': str(key), 'startTime': 1793556000000, 'endTime': 1793559600000}}
+
+        remote.text.side_effect = history
+        remote.json.side_effect = contest_info
+        with patch('club.contest_progress_sources.Remote', return_value=remote), \
+             patch('club.contest_progress_sources.caches', {'platform_requests': backend}), \
+             patch('club.public_catalog.cache', backend), \
+             patch('club.contest_progress_sources.time.monotonic', side_effect=lambda: clock), \
+             patch('club.contest_progress_sources.discover',
+                   side_effect=lambda r, p, a: discover(r, p, a) if p == 'nowcoder' else self.discovered_rows()) as discover_mock, \
+             patch('club.tasks.discover_contest_progress.apply_async',
+                   side_effect=lambda **options: batches.append(options)), \
+             patch('club.tasks.enqueue_hydration') as hydrate_queue:
+            discover_contest_progress(self.author.pk, self.token)
+            self.assertTrue(ContestParticipation.objects.filter(platform='nowcoder', contest_key='100').exists())
+            for _ in range(8):
+                if not batches:
+                    break
+                hydrate_queue.assert_not_called()
+                options = batches.pop(0)
+                self.assertEqual(options['kwargs']['resume_bindings'], [binding.pk])
+                clock = 0
+                discover_contest_progress(*options['args'], **options['kwargs'])
+            self.assertFalse(batches)
+        self.state.refresh_from_db()
+        self.assertEqual((self.state.status, self.state.total, self.state.has_errors), ('pending', 82, False))
+        self.assertEqual(hydrate_queue.call_count, 82)
+        self.assertEqual(sum(call.args[1] == 'codeforces' for call in discover_mock.call_args_list), 1)
+        self.assertEqual(rated_requests, 1)
+        self.assertEqual(pages, [*range(1, 19), *range(18, 81)])
+        self.assertCountEqual(metadata, [*range(1, 81), 100, 1])
+        self.assertIsNone(backend.get(f'nowcoder-discovery:v1:{self.author.pk}:9'))
 
     def discovered_rows(self,*args):
         return [{'contest_key':'new-contest','title':'New contest','url':'https://codeforces.com/contest/999',

@@ -28,11 +28,11 @@ def progress(request):
     if request.method == 'POST':
         contest_url = body(request).get('contest_url') if request.body else None
         if contest_url is not None:
-            from .contest_progress_sources import parse_contest_url
-            try: platform, _, _ = parse_contest_url(contest_url)
+            from .contest_progress_sources import contest_link_bindings, parse_contest_url
+            try: platform, _, host = parse_contest_url(contest_url)
             except ValueError as exc: return api_error(str(exc),400)
-            if not PlatformBinding.objects.filter(user=request.user,platform=platform).exists():
-                return api_error('请先绑定该平台账号',400)
+            if not contest_link_bindings(PlatformBinding.objects.filter(user=request.user), platform, host).exists():
+                return api_error('请先绑定与比赛链接对应的平台或地区账号',400)
         with transaction.atomic():
             if not lock_active_member(request.user.pk,member.pk):
                 return api_error('账号或团队身份已失效，不能同步比赛历史',403)
