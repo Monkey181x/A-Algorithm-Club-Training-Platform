@@ -202,11 +202,12 @@ def discover_contest_progress(user_id, token, contest_url=None):
                                 user_id=user_id,platform=binding.platform,account=binding.account,contest_key=key,
                                 detail_complete=True,sync_error='').exists():
                             continue
-                    if binding.platform == 'leetcode':
+                    preserved_fields = {'leetcode': ('rank', 'ranking_scan'), 'luogu': ('luogu_scan',)}.get(binding.platform)
+                    if preserved_fields:
                         existing = ContestParticipation.objects.filter(user_id=user_id, platform=binding.platform,
                             account=binding.account, contest_key=key).first()
                         if existing:
-                            row['source_data'] = {**{k:v for k,v in existing.source_data.items() if k in ('rank','ranking_scan')}, **row.get('source_data', {})}
+                            row['source_data'] = {**{k:v for k,v in existing.source_data.items() if k in preserved_fields}, **row.get('source_data', {})}
                     c, _ = ContestParticipation.objects.update_or_create(user_id=user_id, platform=binding.platform,
                         account=binding.account, contest_key=key, defaults=row)
                     pending.add(c.pk)

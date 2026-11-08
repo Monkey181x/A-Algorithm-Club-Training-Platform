@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from django.test import TestCase
 from . import test_community as fixtures
 from .models import PlatformBinding,ContestSyncState,CurrencyTransaction
@@ -122,6 +122,94 @@ class NightlyContestTests(TestCase):
         self.assertEqual(state.auto_retry_at,self.now+timedelta(minutes=5))
         self.clock_mock.return_value=state.auto_retry_at
         self.assertEqual(check_contests_nightly()['status'],'started')
+
+    def test_luogu_hydration_resumes_long_history_after_nightly_retry(self):
+        from .contest_progress_sources import header
+        from .models import ContestParticipation, ContestProblemProgress
+        from .platform_sync import SyncError
+        from .tasks import discover_contest_progress, hydrate_contest_progress
+
+        self.binding.platform = 'luogu'
+        self.binding.save()
+        start = self.now - timedelta(hours=2)
+        end = start + timedelta(hours=1)
+        url = 'https://www.luogu.com.cn/contest/42'
+        pages = []
+        calls = []
+        clock = 0
+        remote = Mock(deadline=140)
+        fail_page = True
+
+        def response(request_url, **kwargs):
+            nonlocal clock
+            self.assertLess(clock, remote.deadline)
+            clock += 2
+            if request_url == url:
+                calls.append('metadata')
+                self.assertEqual(remote.deadline, 140)
+                return {'data': {'problems': [{'pid': pid} for pid in ('P1', 'P2')]}}
+            if request_url.endswith('/practice'):
+                return {'data': {'passed': ['P1', 'P2']}}
+            calls.append('records')
+            page = int(request_url.rsplit('=', 1)[-1])
+            pages.append(page)
+            self.assertLess(remote.deadline, 140)
+            if page == 16 and fail_page:
+                raise SyncError('temporary failure')
+            rows = []
+            if page <= 80:
+                submitted_at = {1: end.timestamp(), 80: start.timestamp()}.get(page, end.timestamp() + 60)
+                rows = [{'id': page, 'user': {'uid': 9}, 'status': 12, 'submitTime': submitted_at,
+                         'problem': {'pid': 'P1' if page == 1 else 'P2'}, 'contest': {'id': 42}}]
+            return {'data': {'records': {'result': rows}}}
+
+        def run_hydration(token):
+            nonlocal clock
+            clock = 0
+            calls.clear()
+            hydrate_contest_progress(contest.pk, token)
+            self.assertEqual(calls[0], 'metadata')
+            self.assertEqual(remote.deadline, 140)
+
+        remote.json.side_effect = response
+        with patch('club.contest_progress_sources.Remote', return_value=remote), \
+             patch('club.contest_progress_sources.discover', side_effect=lambda *args: [
+                 header('42', 'Probe', url, start.timestamp(), end.timestamp())]), \
+             patch('club.contest_progress_sources.configure_luogu', return_value='_uid=7; __client_id=test'), \
+             patch('club.platform_sync.luogu', return_value={'profile_url': 'https://www.luogu.com.cn/user/9'}), \
+             patch('club.contest_progress_sources.time.monotonic', side_effect=lambda: clock), \
+             patch('club.contest_progress_sources.time.sleep'), \
+             patch('club.tasks.enqueue_hydration') as enqueue, self.captureOnCommitCallbacks(execute=True):
+            check_contests_nightly()
+            state = ContestSyncState.objects.get(user=self.author)
+            token = str(state.token)
+            discover_contest_progress(self.author.pk, token)
+            contest = ContestParticipation.objects.get(user=self.author)
+            run_hydration(token)
+            contest.refresh_from_db()
+            self.assertEqual(contest.source_data['luogu_scan']['next_page'], 16)
+            run_hydration(token)
+            state.refresh_from_db()
+            self.assertEqual(state.status, 'failed')
+            self.assertIsNotNone(state.auto_retry_at)
+            self.clock_mock.return_value = state.auto_retry_at
+            fail_page = False
+            check_contests_nightly()
+            state.refresh_from_db()
+            token = str(state.token)
+            discover_contest_progress(self.author.pk, token)
+            for _ in range(5):
+                run_hydration(token)
+
+        self.assertEqual(pages, [*range(1, 17), *range(16, 82)])
+        self.assertEqual(enqueue.call_count, 7)
+        state.refresh_from_db()
+        contest.refresh_from_db()
+        self.assertEqual(state.status, 'ready')
+        self.assertTrue(contest.detail_complete)
+        self.assertNotIn('luogu_scan', contest.source_data)
+        progress = ContestProblemProgress.objects.filter(participation=contest).order_by('problem_key')
+        self.assertEqual(list(progress.values_list('accepted_at', 'official_ac')), [(end, False), (start, True)])
 
     def test_late_failure_and_heartbeat_cannot_overwrite_new_run(self):
         import uuid

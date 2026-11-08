@@ -36,8 +36,8 @@ _cf_lock = threading.Lock()
 _cf_last = 0.0
 _ATCODER_DISCOVERY_PAGE_LIMIT = 24
 _ATCODER_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
-_LUOGU_DISCOVERY_PAGE_LIMIT = 15
-_LUOGU_DISCOVERY_SCAN_SECONDS = 45
+_LUOGU_SCAN_PAGE_LIMIT = 15
+_LUOGU_SCAN_SECONDS = 45
 _LUOGU_METADATA_RESERVE_SECONDS = 45
 _LUOGU_DISCOVERY_CHECKPOINT_TTL = 2 * 24 * 60 * 60
 
@@ -305,19 +305,12 @@ def discover(remote, platform, account):
                 checkpoint_key = f'luogu-discovery:v1:{user_id}:{uid}'
                 checkpoint = checkpoint_cache.get(checkpoint_key) or checkpoint
                 keys.update(checkpoint.get('pending_keys', ()))
-            deadline = getattr(remote, 'deadline', None)
-            bounded = isinstance(deadline, (int, float))
             try:
                 if checkpoint['next_page'] is not None:
-                    if bounded:
-                        remote.remote.deadline = min(time.monotonic() + _LUOGU_DISCOVERY_SCAN_SECONDS,
-                                                     deadline - _LUOGU_METADATA_RESERVE_SECONDS)
-                    luogu_ac_times(remote, uid, cookie, REWARD_START.timestamp(), discovered=keys, checkpoint=checkpoint)
+                    scan_luogu_records(remote, uid, cookie, REWARD_START.timestamp(), discovered=keys,
+                                       checkpoint=checkpoint, reserve=_LUOGU_METADATA_RESERVE_SECONDS)
             except SyncError as exc:
                 discovery_warning = '提交记录获取不完整，已保留发现的比赛：' + str(exc)
-            finally:
-                if bounded:
-                    remote.remote.deadline = deadline
         pending_keys = set()
         for key in sorted(keys, key=lambda key: (key not in rated_keys, key)):
             try:
@@ -379,7 +372,19 @@ def configure_luogu(remote):
     return cookie
 
 
-def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=None, evidence=None, discovered=None, checkpoint=None):
+def scan_luogu_records(remote, uid, cookie, since, *, reserve=0, **kwargs):
+    deadline = getattr(remote, 'deadline', None)
+    if not isinstance(deadline, (int, float)):
+        return luogu_ac_times(remote, uid, cookie, since, **kwargs)
+    remote.remote.deadline = min(time.monotonic() + _LUOGU_SCAN_SECONDS, deadline - reserve)
+    try:
+        return luogu_ac_times(remote, uid, cookie, since, **kwargs)
+    finally:
+        remote.remote.deadline = deadline
+
+
+def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=None, evidence=None,
+                   discovered=None, checkpoint=None, problem_ids=None):
     """Read the authenticated Lentille record list, independently implemented.
 
     Protocol reference: icpc-workbench luogu adapter. Missing timestamps remain
@@ -392,7 +397,7 @@ def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=
         remote.session.cookies.set(name, pairs[name], domain='www.luogu.com.cn', path='/', secure=True)
     result = evidence if evidence is not None else {}; seen = set()
     first_page = checkpoint['next_page'] if checkpoint is not None else 1
-    page_limit = _LUOGU_DISCOVERY_PAGE_LIMIT if checkpoint is not None else 100
+    page_limit = _LUOGU_SCAN_PAGE_LIMIT if checkpoint is not None else 100
     if checkpoint is not None and checkpoint.get('last_signature'):
         seen.add(tuple(checkpoint['last_signature']))
     for page in range(first_page, first_page + page_limit):
@@ -412,11 +417,10 @@ def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=
         if signature in seen:
             raise SyncError('洛谷提交记录分页未能继续')
         seen.add(signature)
+        if any(str((row.get('user') or {}).get('uid', '')) != str(uid) for row in rows):
+            raise SyncError('洛谷提交记录账号不匹配')
         times = []
         for row in rows:
-            owner = row.get('user') or {}
-            if str(owner.get('uid','')) != str(uid):
-                raise SyncError('洛谷提交记录账号不匹配')
             value = row.get('submitTime')
             try:
                 value = float(value)
@@ -433,7 +437,7 @@ def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=
             if discovered is not None and record_contest.get('id'):
                 discovered.add(str(record_contest['id']))
             same_contest = contest_key is None or str(record_contest.get('id')) == str(contest_key)
-            if row.get('status') == 12 and pid:
+            if row.get('status') == 12 and pid and (problem_ids is None or pid in problem_ids):
                 if same_contest:result.setdefault(pid, []).append(value)
                 elif other_evidence is not None:other_evidence.setdefault(pid,[]).append(value)
         if len(times) == len(rows) and max(times) < since:
@@ -443,8 +447,19 @@ def luogu_ac_times(remote, uid, cookie, since, contest_key=None, other_evidence=
         if checkpoint is not None:
             checkpoint.update(next_page=page + 1, last_signature=signature)
     if checkpoint is not None:
-        raise SyncError('本次已达到提交扫描上限，下次同步继续')
+        raise ContinueHydration('洛谷提交记录分批核验中')
     raise SyncError('洛谷历史记录过多，本次未能完整核验比赛时段')
+
+
+def summarize_luogu_times(evidence, start, end):
+    summary = {}
+    for pid, times in evidence.items():
+        inside = min((t for t in times if t is not None and start <= t < end), default=None)
+        outside = min((t for t in times if t is not None and not start <= t < end), default=None)
+        summary[pid] = [t for t in (inside, outside) if t is not None]
+        if None in times:
+            summary[pid].append(None)
+    return summary
 
 
 def nowcoder_ratings(remote):
@@ -695,17 +710,44 @@ def hydrate(remote, contest):
         if not isinstance(practice.get('passed'), list):
             raise SyncError('洛谷公开 AC 清单暂不可读取')
         passed = {str(p.get('pid')) if isinstance(p, dict) else str(p) for p in practice['passed']}
-        known = {}; other_evidence={}
-        if cookie:
-            uid = profile['profile_url'].rstrip('/').rsplit('/',1)[-1]
-            try:known = luogu_ac_times(remote,uid,cookie,start,contest.contest_key,other_evidence,known)
-            except SyncError as exc:
-                logger.warning('Luogu timing unavailable; retaining proven AC fallback: %s',str(exc)[:160])
-                # Retain already verified records even if a later page failed.
         d = remote.json(contest.url, headers={'x-lentille-request':'content-only'})
         data = d.get('data', d.get('currentData', d))
+        problems = data.get('contestProblems', data.get('problems', []))
+        if not problems:
+            raise SyncError('洛谷题目清单暂不可公开读取')
+        known = {}; other_evidence = {}; warning = ''
+        saved_scan = contest.source_data.get('luogu_scan', {})
+        if cookie:
+            from .submission_evidence import EVIDENCE_MAX_AGE
+            uid = profile['profile_url'].rstrip('/').rsplit('/',1)[-1]
+            now = time.time()
+            max_age = EVIDENCE_MAX_AGE.total_seconds()
+            scope = [uid, start, end]
+            checkpoint = {'next_page': 1, 'observed_at': now, 'scope': scope}
+            if saved_scan.get('scope') == scope and now - saved_scan['observed_at'] <= max_age:
+                checkpoint.update(saved_scan)
+                known = {pid: list(times) for pid, times in saved_scan['known'].items()}
+                other_evidence = {pid: list(times) for pid, times in saved_scan['other_evidence'].items()}
+            first_page = checkpoint['next_page']
+            try:
+                scan_luogu_records(remote, uid, cookie, start, contest_key=contest.contest_key,
+                                   evidence=known, other_evidence=other_evidence, checkpoint=checkpoint,
+                                   problem_ids={row.get('problem', row)['pid'] for row in problems})
+            except SyncError as exc:
+                checkpoint['known'] = summarize_luogu_times(known, start, end)
+                checkpoint['other_evidence'] = summarize_luogu_times(other_evidence, start, end)
+                contest.source_data['luogu_scan'] = checkpoint
+                if checkpoint['next_page'] > first_page:
+                    raise ContinueHydration('洛谷提交记录分批核验中') from exc
+                warning = '洛谷提交记录暂未核验完整，已保留扫描进度：' + str(exc)
+            else:
+                contest.source_data.pop('luogu_scan', None)
+                if time.time() - checkpoint['observed_at'] > max_age:
+                    raise SyncError('洛谷提交记录核验已过期，请重新同步')
+        elif saved_scan:
+            warning = '洛谷查询 Cookie 暂不可用，已保留扫描进度'
         result = []
-        for i, row in enumerate(data.get('contestProblems', data.get('problems', []))):
+        for i, row in enumerate(problems):
             p = row.get('problem', row)
             evidence = known.get(p['pid'], [])
             outside_context=other_evidence.get(p['pid'],[])
@@ -719,7 +761,5 @@ def hydrate(remote, contest):
                 if known_outside:row.update(accepted=True,official_ac=False,accepted_at=stamp(min(known_outside)))
                 else:relaxed_ac(row,p['pid'] in passed or bool(evidence) or bool(outside_context))
             result.append(row)
-        if not result:
-            raise SyncError('洛谷题目清单暂不可公开读取')
-        return result, ''
+        return result, warning
     raise SyncError('不支持此平台')
