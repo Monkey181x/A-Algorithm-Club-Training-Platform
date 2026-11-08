@@ -1,5 +1,6 @@
 from datetime import timedelta
 from unittest.mock import Mock,patch
+from django.core.cache.backends.locmem import LocMemCache
 from django.test import TestCase
 from django.utils import timezone
 from . import test_community as fixtures
@@ -10,6 +11,10 @@ from .contest_progress_sources import hydrate
 class SubmissionEvidenceTests(TestCase):
     def setUp(self):
         fixtures.CommunityTests.setUp(self)
+        isolated_cache = LocMemCache(self.id(), {})
+        self.addCleanup(isolated_cache.clear)
+        self.enterContext(patch('club.public_catalog.cache', isolated_cache))
+        self.enterContext(patch('club.contest_progress_sources.caches', {'platform_requests': isolated_cache}))
         self.binding=PlatformBinding.objects.create(user=self.author,platform='atcoder',account='reader')
         self.now=timezone.now()
         self.contest=ContestParticipation.objects.create(user=self.author,platform='atcoder',account='reader',contest_key='abc1',title='ABC',url='https://atcoder.jp/contests/abc1',starts_at=self.now-timedelta(hours=2),ends_at=self.now-timedelta(hours=1))
@@ -74,3 +79,48 @@ class SubmissionEvidenceTests(TestCase):
         remote=Mock()
         results,error=hydrate(remote,self.contest)
         self.assertTrue(results[0]['accepted']);remote.json.assert_not_called()
+
+    def test_atcoder_discovery_resumes_partial_submission_history(self):
+        from .contest_progress_sources import discover
+        from .contest_rewards import REWARD_START
+        from .platform_sync import SyncError
+
+        start = int(REWARD_START.timestamp())
+        catalog = [
+            {'id': key, 'title': key, 'start_epoch_second': start, 'duration_second': 3600}
+            for key in ('rated', 'first', 'second')
+        ]
+        rated_history = [{'ContestScreenName': 'rated.contest.atcoder.jp'}]
+        first_row = {'contest_id': 'first', 'user_id': 'reader', 'epoch_second': start + 60}
+        second_row = dict(first_row, contest_id='second', epoch_second=start + 90)
+        remote = Mock()
+        remote.evidence_user_id = self.author.pk
+        remote.json.side_effect = [
+            rated_history, [first_row] * 500, SyncError('暂时不可用'),
+            rated_history, [second_row],
+        ]
+        with patch('club.contest_progress_sources.cached', return_value=catalog), \
+                patch('club.contest_progress_sources.time.sleep'):
+            partial = discover(remote, 'atcoder', 'reader')
+            self.assertTrue(partial.warning)
+            self.assertEqual({row['contest_key'] for row in partial}, {'rated', 'first'})
+            self.assertTrue(remote.json.call_args.args[0].endswith(f'from_second={start + 61}'))
+
+            complete = discover(remote, 'atcoder', 'reader')
+            self.assertEqual(complete.warning, '')
+            self.assertEqual({row['contest_key'] for row in complete}, {'rated', 'first', 'second'})
+            self.assertTrue(remote.json.call_args.args[0].endswith(f'from_second={start + 61}'))
+
+    def test_atcoder_discovery_bounds_full_pages(self):
+        from .contest_progress_sources import discover
+        from .contest_rewards import REWARD_START
+
+        start = int(REWARD_START.timestamp())
+        remote = Mock()
+        remote.evidence_user_id = self.author.pk
+        remote.json.side_effect = [[], [{'epoch_second': start + 60}] * 500]
+        with patch('club.contest_progress_sources.cached', return_value=[]), \
+                patch('club.contest_progress_sources._ATCODER_DISCOVERY_PAGE_LIMIT', 1):
+            rows = discover(remote, 'atcoder', 'reader')
+        self.assertTrue(rows.warning)
+        self.assertEqual(remote.json.call_count, 2)
