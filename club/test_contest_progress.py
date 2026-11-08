@@ -146,6 +146,42 @@ class ProgressTests(TestCase):
             hydrate_contest_progress(self.contest.pk,'00000000-0000-0000-0000-000000000000')
             source.assert_not_called()
 
+    def test_automatic_sync_requeues_saved_eligible_contests_once(self):
+        from .tasks import discover_contest_progress
+
+        self.contest.source_data = {'manual': True, 'ranking_scan': {'page': 8}}
+        self.contest.detail_complete = False
+        self.contest.sync_error = '暂时不可用'
+        self.contest.save()
+        discovered = dict(contest_key='weekly-contest-531', title='Discovered', url=self.contest.url,
+                          starts_at=self.contest.starts_at, ends_at=self.contest.ends_at)
+        duplicate = ContestParticipation.objects.create(
+            user=self.user, platform=self.binding.platform, account=self.binding.account, **discovered,
+        )
+        for key, account, starts_at, ends_at, complete in [
+            ('other-account', 'cn:old-reader', REWARD_START, self.contest.ends_at, False),
+            ('before-cutoff', self.binding.account, REWARD_START-timedelta(days=1), REWARD_START, False),
+            ('in-progress', self.binding.account, REWARD_START, REWARD_START+timedelta(days=11), False),
+            ('already-complete', self.binding.account, REWARD_START, self.contest.ends_at, True),
+        ]:
+            ContestParticipation.objects.create(
+                user=self.user, platform=self.binding.platform, account=account, contest_key=key,
+                title=key, url=self.contest.url, starts_at=starts_at, ends_at=ends_at, detail_complete=complete,
+            )
+        state = ContestSyncState.objects.create(user=self.user, status='pending')
+        state.auto_token = state.token
+        state.save(update_fields=['auto_token'])
+        with patch('club.contest_progress_sources.discover', return_value=[discovered]), \
+                patch('club.tasks.enqueue_hydration') as enqueue, self.captureOnCommitCallbacks(execute=True):
+            discover_contest_progress(self.user.pk, str(state.token))
+        self.assertCountEqual([call.args for call in enqueue.call_args_list], [
+            (self.contest.pk, str(state.token)), (duplicate.pk, str(state.token)),
+        ])
+        state.refresh_from_db()
+        self.contest.refresh_from_db()
+        self.assertEqual((state.status, state.total, state.remaining), ('pending', 2, 2))
+        self.assertEqual(self.contest.source_data['ranking_scan'], {'page': 8})
+
     def test_sync_failure_retains_verified_progress(self):
         from .tasks import hydrate_contest_progress
         from .platform_sync import SyncError
