@@ -71,6 +71,16 @@ def validate(url, value):
         raise SyncError('牛客比赛资料不完整')
 
 
+def release_cache_lock(backend, key, owner):
+    # A late owner must not release a replacement lease.
+    if hasattr(backend, '_cache') and hasattr(backend._cache, 'get_client'):
+        client = backend._cache.get_client(write=True)
+        client.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                    1, backend.make_key(key), backend._cache._serializer.dumps(owner))
+    elif backend.get(key) == owner:
+        backend.delete(key)
+
+
 def resource(url, loader, *, historical=False):
     rule = policy(url)
     if rule is None:
@@ -93,14 +103,7 @@ def resource(url, loader, *, historical=False):
                 cache.set(key, {'value': value, 'fetched_at': time.time(), 'source': url}, 30 * 86400)
                 return value
             finally:
-                # Redis compare-and-delete prevents a late owner releasing a
-                # replacement lease. LocMem is only used in isolated tests.
-                if hasattr(cache, '_cache') and hasattr(cache._cache, 'get_client'):
-                    client = cache._cache.get_client(write=True)
-                    client.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-                                1, cache.make_key(key + ':lock'), cache._cache._serializer.dumps(owner))
-                elif cache.get(key + ':lock') == owner:
-                    cache.delete(key + ':lock')
+                release_cache_lock(cache, key + ':lock', owner)
         if time.monotonic() >= deadline:
             raise SyncError('公开比赛资料正在更新，请稍后重试')
         time.sleep(.1)

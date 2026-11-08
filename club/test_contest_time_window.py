@@ -46,6 +46,76 @@ class WindowTests(SimpleTestCase):
 
 
 class RecoveryTests(SimpleTestCase):
+    def test_nowcoder_long_ac_scan_preserves_progress_and_shares_complete_result(self):
+        from urllib.parse import parse_qs, urlsplit
+        from django.core.cache.backends.locmem import LocMemCache
+        from .contest_progress_sources import ContinueHydration, SyncError
+
+        backend = LocMemCache(self.id(), {})
+        self.addCleanup(backend.clear)
+        start = REWARD_START + timedelta(hours=10)
+        contest = NS(platform='nowcoder', account='9', contest_key='42',
+                     url='https://ac.nowcoder.com/acm/contest/42', starts_at=start,
+                     ends_at=start + timedelta(hours=1))
+        clock = 0
+        pages = []
+        calls = []
+        remote = Mock(deadline=140)
+
+        def metadata(url, **kwargs):
+            nonlocal clock
+            self.assertEqual(remote.deadline, 140)
+            clock += 2
+            if '/problem-list' in url:
+                calls.append('problems')
+                return {'data': {'data': [{'problemId': 1, 'index': 'A'}, {'problemId': 80, 'index': 'B'}]}}
+            calls.append('ratings')
+            return {'code': 0, 'data': {'papers': []}}
+
+        def history(url, **kwargs):
+            nonlocal clock
+            self.assertEqual(calls[0], 'problems')
+            self.assertLessEqual(remote.deadline, 47)
+            self.assertLess(clock, remote.deadline)
+            clock += 2
+            page = int(parse_qs(urlsplit(url).query)['page'][0])
+            pages.append(page)
+            if page == 16 and pages.count(16) == 1:
+                raise SyncError('temporary failure')
+            day = '2026-11-01 10:05:00' if page == 80 else '2026-11-01 20:00:00'
+            next_link = '<a rel="next" href="?page=2">Next</a>' if page < 80 else ''
+            return ('<script>window.curUser.id="9";</script><table><tr>'
+                    f'<td></td><td><a href="/acm/problem/{page}">Problem</a></td>'
+                    f'<td>Accepted</td><td>{day}</td></tr></table>{next_link}')
+
+        remote.json.side_effect = metadata
+        remote.text.side_effect = history
+        with patch('club.contest_progress_sources.caches', {'platform_requests': backend}), \
+             patch('club.contest_progress_sources.cache', backend), \
+             patch('club.public_catalog.cache', backend), \
+             patch('club.contest_progress_sources.time.monotonic', side_effect=lambda: clock):
+            with self.assertRaises(ContinueHydration):
+                hydrate(remote, contest)
+            self.assertEqual(backend.get('nc-accepted:v3:9')['next_page'], 16)
+            clock = 0
+            with self.assertRaisesMessage(SyncError, 'temporary failure'):
+                hydrate(remote, contest)
+            self.assertEqual(backend.get('nc-accepted:v3:9')['next_page'], 16)
+            for _ in range(4):
+                clock = 0
+                with self.assertRaises(ContinueHydration):
+                    hydrate(remote, contest)
+            clock = 0
+            rows, error = hydrate(remote, contest)
+            self.assertEqual(calls[-1], 'ratings')
+            self.assertFalse(error)
+            self.assertEqual([row['official_ac'] for row in rows], [False, True])
+            self.assertTrue(rows[0]['accepted'])
+            clock = 0
+            contest.contest_key = '43'
+            hydrate(remote, contest)
+        self.assertEqual(pages, [*range(1, 17), *range(16, 81)])
+
     def test_leetcode_batches_reach_page_101_and_resume_failed_page(self):
         from .contest_progress_sources import ContinueHydration, SyncError
         c=NS(platform='leetcode',account='reader',contest_key='weekly-contest-1',starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=1),source_data={'manual':True})

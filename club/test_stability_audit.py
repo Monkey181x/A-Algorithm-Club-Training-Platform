@@ -262,10 +262,10 @@ class AuditDifficultyTests(SimpleTestCase):
         from .contest_progress_sources import hydrate,SyncError
         remote=Mock()
         remote.json.side_effect=[{'data':{'passed':['P1']}},{'data':{'contestProblems':[{'no':'A','problem':{'pid':'P1','name':'One','difficulty':2}}]}}]
-        c=SimpleNamespace(platform='luogu',contest_key='1',account='9',url='https://www.luogu.com.cn/contest/1',starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=2))
+        c=SimpleNamespace(platform='luogu',contest_key='1',account='9',url='https://www.luogu.com.cn/contest/1',starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=2),source_data={})
         with patch('club.contest_progress_sources.configure_luogu',return_value='cookie'),patch('club.platform_sync.luogu',return_value={'profile_url':'https://www.luogu.com.cn/user/9'}),patch('club.contest_progress_sources.luogu_ac_times',side_effect=SyncError('temporary denial')):
             rows,error=hydrate(remote,c)
-        self.assertTrue(rows[0]['accepted']);self.assertIsNone(rows[0]['accepted_at']);self.assertFalse(error)
+        self.assertTrue(rows[0]['accepted']);self.assertIsNone(rows[0]['accepted_at']);self.assertIn('temporary denial',error)
 
     def test_known_outside_nowcoder_time_does_not_become_unknown(self):
         from .contest_progress_sources import hydrate
@@ -298,7 +298,7 @@ class AuditDifficultyTests(SimpleTestCase):
     def test_luogu_current_schema_labels_difficulty_and_official_ac(self):
         from .contest_progress_sources import hydrate
         remote=Mock();start=REWARD_START.timestamp()
-        contest=SimpleNamespace(platform='luogu',contest_key='88',account='9',url='https://www.luogu.com.cn/contest/88',starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=2))
+        contest=SimpleNamespace(platform='luogu',contest_key='88',account='9',url='https://www.luogu.com.cn/contest/88',starts_at=REWARD_START,ends_at=REWARD_START+timedelta(hours=2),source_data={})
         remote.json.side_effect=[{'data':{'passed':['P1','P2']}},{'data':{'contestProblems':[
             {'no':'T1','problem':{'pid':'P1','name':'One','difficulty':4}}, {'no':'T2','problem':{'pid':'P2','name':'Two','difficulty':0}}]}}]
         with patch('club.contest_progress_sources.configure_luogu',return_value='cookie'),patch('club.platform_sync.luogu',return_value={'profile_url':'https://www.luogu.com.cn/user/9'}),patch('club.contest_progress_sources.luogu_ac_times',return_value={'P1':[start+10],'P2':[start+10000]}):
@@ -319,12 +319,16 @@ class AuditDifficultyTests(SimpleTestCase):
         self.assertEqual(result,{'P2':[1001]})
 
     def test_nowcoder_follows_small_html_pages_and_retains_multiple_times(self):
+        from django.core.cache.backends.locmem import LocMemCache
         from .contest_progress_sources import nowcoder_accepted
+        backend = LocMemCache(self.id(), {})
+        self.addCleanup(backend.clear)
         remote=Mock()
         def html(day,next_page=False):
             return '<script>window.curUser.id="9";</script><table><tr><td>1</td><td><a href="/acm/problem/1">One</a></td><td>答案正确</td><td>'+day+'</td></tr></table>'+('<div class="pagination"><a href="?page=2">下一页</a></div>' if next_page else '')
         remote.text.side_effect=[html('2026-11-01 12:00:00',True),html('2026-10-31 12:00:00')]
-        with patch('club.contest_progress_sources.cache.get',return_value=None):result=nowcoder_accepted(remote,'9')
+        with patch('club.contest_progress_sources.caches', {'platform_requests': backend}):
+            result=nowcoder_accepted(remote,'9')
         self.assertEqual(len(result['problem/1']),2)
         self.assertEqual(remote.text.call_count,2)
 

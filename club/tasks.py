@@ -242,9 +242,10 @@ def discover_contest_progress(user_id, token, contest_url=None):
             transaction.on_commit(lambda pk=pk: enqueue_hydration(pk, token))
 
 
-def enqueue_hydration(contest_id, token):
+def enqueue_hydration(contest_id, token, *, countdown=0):
     try:
-        hydrate_contest_progress.apply_async(args=[contest_id,token],retry=False)
+        options = {'countdown': countdown} if countdown else {}
+        hydrate_contest_progress.apply_async(args=[contest_id,token],retry=False,**options)
     except Exception:
         from .models import ContestSyncState,ContestParticipation
         contest=ContestParticipation.objects.filter(pk=contest_id).first()
@@ -265,7 +266,7 @@ def hydrate_contest_progress(contest_id, token):
     try:
         rows, error = hydrate(remote, c)
     except ContinueHydration as exc:
-        continuation = True; error = str(exc)
+        continuation = True; error = str(exc); countdown = exc.delay
     except Exception as exc:
         error = str(exc)[:240] if isinstance(exc, SyncError) else '比赛题目或正式榜单暂不可读取，请稍后同步'
     finally:
@@ -286,7 +287,10 @@ def hydrate_contest_progress(contest_id, token):
             c.sync_error = error
             c.save(update_fields=['source_data','sync_error'])
             state.progressed_at=timezone.now(); state.save(update_fields=['progressed_at'])
-            transaction.on_commit(lambda: enqueue_hydration(c.pk, token))
+            if countdown:
+                transaction.on_commit(lambda: enqueue_hydration(c.pk, token, countdown=countdown))
+            else:
+                transaction.on_commit(lambda: enqueue_hydration(c.pk, token))
             return
         c.hydrated_token = token
         c.save(update_fields=['hydrated_token','source_data'])
