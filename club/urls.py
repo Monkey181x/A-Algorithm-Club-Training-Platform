@@ -61,6 +61,9 @@ urlpatterns = [
     path('management/backups/<uuid:backup_id>', system_management.backup_detail),
     path('management/backups/<uuid:backup_id>/restore', system_management.restore_backup),
     path('management/system-operations/<uuid:operation_id>', system_management.operation_status),
+    path('extensions/categories', extension_views.categories),
+    path('extensions/categories/<str:category_key>/move', extension_views.move_category),
+    path('extensions/categories/<str:category_key>', extension_views.categories),
     path('extensions/builtin/poker', extension_views.builtin_category),
     path('extensions', extension_views.resources),
     path('extensions/<int:resource_id>', extension_views.resources),
@@ -139,5 +142,6 @@ urlpatterns = [
     # Admin currency endpoints
     path("currency/admin/adjust", currency.api_admin_adjust_balance),
     path("currency/admin/config", currency.api_admin_currency_config),
+    path("currency/admin/shop/categories", currency.api_admin_shop_categories),
     path("currency/admin/shop", currency.api_admin_shop_items),
 ]

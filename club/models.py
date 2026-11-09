@@ -63,16 +63,22 @@ class ContestCalendarSnapshot(models.Model):
     error = models.CharField(max_length=100, blank=True)
 
 
-EXTENSION_CATEGORIES = [("library", "资料库"), ("games", "小游戏")]
+class ExtensionCategory(models.Model):
+    key = models.CharField(max_length=16, primary_key=True)
+    name = models.CharField(max_length=30, unique=True)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['position', 'key']
 
 
 class BuiltinExtensionCategory(models.Model):
     key = models.CharField(max_length=40, primary_key=True)
-    category = models.CharField(max_length=16, choices=EXTENSION_CATEGORIES, default="games")
+    category = models.CharField(max_length=16)
 
 
 class ExtensionResource(models.Model):
-    category = models.CharField(max_length=16, choices=EXTENSION_CATEGORIES, default="library")
+    category = models.CharField(max_length=16)
     title = models.CharField(max_length=100)
     description = models.CharField(max_length=300, blank=True)
     url = models.URLField(max_length=2000, blank=True)
@@ -550,9 +556,20 @@ class RetirementSubsidy(models.Model):
         constraints = [models.UniqueConstraint(fields=['user', 'team'], name='unique_user_team_retirement_subsidy')]
 
 
+class ShopCategory(models.Model):
+    team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name='shop_categories')
+    name = models.CharField(max_length=30)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['position', 'id']
+        constraints = [models.UniqueConstraint(fields=['name'], name='unique_shop_category_name')]
+
+
 class ShopItem(models.Model):
+    category = models.ForeignKey(ShopCategory, on_delete=models.PROTECT, null=True, blank=True, related_name='items')
     """RBC Shop items"""
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="shop_items")
+    team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name="shop_items")
     name = models.CharField(max_length=100, verbose_name="商品名称")
     description = models.TextField(blank=True, verbose_name="商品描述")
     icon = models.ImageField(upload_to="shop_items/", blank=True, verbose_name="商品图标")
@@ -585,8 +602,9 @@ class ShopItem(models.Model):
 class Purchase(models.Model):
     """Purchase history"""
     request_id = models.UUIDField(null=True,unique=True)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="purchases")
-    member = models.ForeignKey(TeamMembership, on_delete=models.CASCADE, related_name="purchases")
+    team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name="purchases")
+    member = models.ForeignKey(TeamMembership, null=True, blank=True, on_delete=models.SET_NULL, related_name="purchases")
+    user = models.ForeignKey(User, null=True, on_delete=models.CASCADE)
     item = models.ForeignKey(ShopItem, on_delete=models.PROTECT, related_name="purchases")
     quantity = models.PositiveIntegerField(default=1, verbose_name="数量")
     total_price = models.PositiveIntegerField(verbose_name="总价")
@@ -600,14 +618,20 @@ class Purchase(models.Model):
         verbose_name = "购买记录"
         verbose_name_plural = "购买记录"
 
+    def save(self, *args, **kwargs):
+        if not self.user_id and self.member_id:
+            self.user_id = self.member.user_id
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.member.display_name} - {self.item.name} x{self.quantity}"
+        return f"{self.user_id} - {self.item.name} x{self.quantity}"
 
 
 class UserInventory(models.Model):
     """User inventory for consumable items"""
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="user_inventories")
-    member = models.ForeignKey(TeamMembership, on_delete=models.CASCADE, related_name="inventory")
+    team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name="user_inventories")
+    member = models.ForeignKey(TeamMembership, null=True, blank=True, on_delete=models.SET_NULL, related_name="inventory")
+    user = models.ForeignKey(User, null=True, on_delete=models.CASCADE)
     item = models.ForeignKey(ShopItem, on_delete=models.PROTECT, related_name="user_inventories")
     quantity = models.PositiveIntegerField(default=0, verbose_name="数量")
     updated_at = models.DateTimeField(auto_now=True)
@@ -619,8 +643,13 @@ class UserInventory(models.Model):
         verbose_name = "用户库存"
         verbose_name_plural = "用户库存"
 
+    def save(self, *args, **kwargs):
+        if not self.user_id and self.member_id:
+            self.user_id = self.member.user_id
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.member.display_name} - {self.item.name} x{self.quantity}"
+        return f"{self.user_id} - {self.item.name} x{self.quantity}"
 
 
 class OwnedTitle(models.Model):
@@ -670,7 +699,7 @@ class PurchaseBadgeGrant(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=['user', 'key'], name='unique_user_purchase_badge')]
+        constraints = [models.UniqueConstraint(fields=['purchase', 'key'], name='unique_purchase_badge')]
 
 
 class ShopFulfillment(models.Model):

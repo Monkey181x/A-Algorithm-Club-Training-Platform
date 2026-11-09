@@ -47,9 +47,9 @@ def summary(member):
 
 def detail(member):
     return {**summary(member), 'inventory':list(UserInventory.objects.filter(
-        member__user_id=member.user_id).select_related('item').order_by('pk').values(
+        user_id=member.user_id).select_related('item').order_by('pk').values(
         'id', 'item_id', 'item__name', 'item__item_type', 'quantity')),
-        'units':list(ShopFulfillment.objects.filter(purchase__member__user_id=member.user_id).order_by('-pk').values(
+        'units':list(ShopFulfillment.objects.filter(purchase__user_id=member.user_id).order_by('-pk').values(
         'id', 'item_name', 'status', 'purchase__item__item_type'))}
 
 
@@ -64,7 +64,7 @@ def member_list(request, team_id):
     balances = {m.pk:wallets.get(m.user_id,0) for m in rows}
     return private({'members':[{'id':m.pk, 'name':m.display_name, 'account':m.user.username,
         'role':m.role, 'balance':balances.get(m.pk,0)} for m in rows],
-        'items':list(ShopItem.objects.filter(team_id=team_id).order_by('name','pk').values('id','name','item_type','stock'))})
+        'items':list(ShopItem.objects.all().order_by('name','pk').values('id','name','item_type','stock'))})
 
 
 @administrator_required
@@ -160,15 +160,32 @@ def inventory_settings(request, team_id, member_id):
         return api_error('背包设置格式无效')
     try:
         with transaction.atomic():
-            subject=TeamMembership.objects.filter(pk=member_id,team_id=team_id).values_list('user_id',flat=True).first()
-            if subject:User.objects.select_for_update().get(pk=subject)
-            scope=TeamMembership.objects.filter(team_id=team_id,user_id=request.global_inventory_user_id) if getattr(request,'global_inventory_user_id',None) else members(team_id)
-            member = scope.select_for_update(of=('self',)).filter(pk=member_id).first()
-            if not member:
-                return api_error('当前团队成员不存在',404)
+            global_user_id = getattr(request, 'global_inventory_user_id', None)
+            if global_user_id:
+                owner = User.objects.select_for_update().filter(pk=global_user_id,
+                    is_active=True, is_superuser=False).exclude(first_name='CLUB_TEST_SANDBOX').first()
+                if not owner:
+                    return api_error('账号不存在或已停用',404)
+                member = TeamMembership.objects.select_for_update().filter(user=owner).order_by('pk').first()
+                team_id = member.team_id if member else None
+            else:
+                subject=TeamMembership.objects.filter(pk=member_id,team_id=team_id).values_list('user_id',flat=True).first()
+                owner=User.objects.select_for_update().filter(pk=subject).first()
+                member=members(team_id).select_for_update(of=('self',)).filter(pk=member_id).first()
+                if not member:
+                    return api_error('当前团队成员不存在',404)
+            def record(changes):
+                if global_user_id:
+                    LogEntry.objects.create(user=request.user,content_type=ContentType.objects.get_for_model(User),
+                        object_id=str(owner.pk),object_repr=owner.username,action_flag=CHANGE,
+                        change_message=json.dumps(changes,ensure_ascii=False))
+                else:
+                    audit(request.user,member,changes)
+            def result():
+                return private({'ok':True}) if global_user_id else private(detail(member))
             action = data.get('action')
             if action == 'revoke':
-                unit = ShopFulfillment.objects.filter(pk=data.get('unit_id'),purchase__member__user_id=member.user_id).select_related('purchase').first()
+                unit = ShopFulfillment.objects.filter(pk=data.get('unit_id'),purchase__user_id=owner.pk).select_related('purchase').first()
                 if not unit:
                     return api_error('背包物品不存在',404)
                 item = ShopItem.objects.select_for_update().get(pk=unit.purchase.item_id)
@@ -181,11 +198,11 @@ def inventory_settings(request, team_id, member_id):
                     item.save(update_fields=['stock'])
                 unit.status, unit.reclaimed_at = 'reclaimed', timezone.now()
                 unit.save(update_fields=['status','reclaimed_at'])
-                audit(request.user,member,{'action':'inventory_revoke','unit_id':unit.pk,'item_id':item.pk})
+                record({'action':'inventory_revoke','unit_id':unit.pk,'item_id':item.pk})
             elif action in ('grant','quantity'):
-                item = ShopItem.objects.select_for_update().filter(pk=data.get('item_id'),**({'team_id':team_id} if action=='grant' else {})).first()
+                item = ShopItem.objects.select_for_update().filter(pk=data.get('item_id')).first()
                 if not item:
-                    return api_error('当前团队商品不存在',404)
+                    return api_error('商品不存在',404)
                 quantity = data.get('quantity')
                 if type(quantity) is not int or not 0 <= quantity <= 100000:
                     raise ValueError('数量需为 0–100000 的整数')
@@ -198,35 +215,36 @@ def inventory_settings(request, team_id, member_id):
                         raise ValueError('发放请求编号无效') from None
                     prior = Purchase.objects.filter(request_id=token).first()
                     if prior:
-                        if prior.member_id != member.pk or prior.item_id != item.pk or prior.quantity != quantity or prior.total_price != 0:
+                        if prior.user_id != owner.pk or prior.item_id != item.pk or prior.quantity != quantity or prior.total_price != 0:
                             raise ValueError('该发放请求编号已被使用')
-                        return private(detail(member))
+                        return result()
                     from .shop_fulfillment import reserve_codes, create_fulfillments
                     if item.stock >= 0 and item.stock < quantity:
                         raise ValueError('商品库存不足')
                     codes = reserve_codes(item,quantity)
-                    purchase = Purchase.objects.create(team_id=team_id,member=member,item=item,
+                    purchase = Purchase.objects.create(team_id=team_id,member=member,user=owner,item=item,
                         quantity=quantity,total_price=0,request_id=token,**purchase_terms(item))
                     if item.stock >= 0:
                         item.stock -= quantity
                         item.save(update_fields=['stock'])
                     if item.item_type == 'title':
                         from .shop_titles import award
-                        award(member,item,quantity,purchase)
+                        award(member,item,quantity,purchase,user=owner)
                     if item.item_type in ('badge','theme','frame','cosmetic'):
                         from .cosmetics import award
-                        award(member,item,quantity,purchase)
+                        award(member,item,quantity,purchase,user=owner)
                     create_fulfillments(purchase,codes)
                     if item.item_type not in ('physical','redeem_code','title','badge','theme','frame','cosmetic'):
-                        inv,_ = UserInventory.objects.get_or_create(team_id=team_id,member=member,item=item)
+                        from .currency_services import account_inventory
+                        inv,_ = account_inventory(member,item,user=owner)
                         inv = UserInventory.objects.select_for_update().get(pk=inv.pk)
                         if inv.quantity + quantity > 100000:
                             raise ValueError('背包数量不能超过 100000')
                         inv.quantity += quantity
                         inv.save(update_fields=['quantity'])
-                    audit(request.user,member,{'action':'inventory_grant','item_id':item.pk,'quantity':quantity,'purchase_id':purchase.pk})
+                    record({'action':'inventory_grant','item_id':item.pk,'quantity':quantity,'purchase_id':purchase.pk})
                 else:
-                    inv = UserInventory.objects.select_for_update().filter(member__user_id=member.user_id,item=item,**({'pk':data['inventory_id']} if data.get('inventory_id') else {})).first()
+                    inv = UserInventory.objects.select_for_update().filter(user_id=owner.pk,item=item,**({'pk':data['inventory_id']} if data.get('inventory_id') else {})).first()
                     if not inv or item.item_type in ('physical','redeem_code'):
                         raise ValueError('该物品需要按单件状态管理')
                     if type(data.get('expected_quantity')) is not int or inv.quantity != data['expected_quantity']:
@@ -236,11 +254,11 @@ def inventory_settings(request, team_id, member_id):
                     before = inv.quantity
                     inv.quantity = quantity
                     inv.save(update_fields=['quantity'])
-                    audit(request.user,member,{'action':'inventory_quantity','item_id':item.pk,'before':before,'after':quantity})
+                    record({'action':'inventory_quantity','item_id':item.pk,'before':before,'after':quantity})
             else:
                 raise ValueError('未知背包操作')
     except (ValueError,ValidationError,TypeError) as exc:
         return api_error(str(exc))
     except IntegrityError:
         return api_error('物品状态已变化，请刷新后重试',409)
-    return private(detail(member))
+    return result()

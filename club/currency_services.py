@@ -16,6 +16,15 @@ from .models import (
 )
 
 
+def account_inventory(member, item, *, user=None):
+    """Reuse the account's existing product stack across team contexts."""
+    user_id = user.pk if user is not None else member.user_id
+    inventory = UserInventory.objects.filter(user_id=user_id, item=item).order_by('pk').first()
+    if inventory:
+        return inventory, False
+    return UserInventory.objects.create(user_id=user_id, member=member, team=member.team if member else None, item=item), True
+
+
 def positive_id(value):
     if isinstance(value,str) and len(value)<=19 and value.isdigit():value=int(value)
     if type(value) is not int or not 1<=value<=9223372036854775807:
@@ -196,17 +205,17 @@ def makeup_checkin(member, checkin_date):
         raise ValueError('该日期已签到或已有有效提交，无需补签')
     from django.db.models import Sum
     def result(already_open):
-        remaining = UserInventory.objects.filter(member__user_id=member.user_id,
+        remaining = UserInventory.objects.filter(user_id=member.user_id,
             item__item_type='makeup_ticket', quantity__gt=0).aggregate(total=Sum('quantity'))['total'] or 0
         return {'success': True, 'remaining_tickets': remaining, 'checkin_date': checkin_date.isoformat(),
                 'week_id': week.pk, 'already_open': already_open, 'completed': False}
     if permission:
         return result(True)
     inventory = UserInventory.objects.select_for_update(of=('self',)).filter(
-        member__user_id=member.user_id,
+        user_id=member.user_id,
         item__item_type='makeup_ticket', quantity__gt=0).order_by('pk').first()
     if not inventory:
-        item = ShopItem.objects.filter(team=member.team, item_type='makeup_ticket',
+        item = ShopItem.objects.filter(item_type='makeup_ticket',
                                        is_active=True).exclude(stock=0).order_by('price', 'pk').first()
         error = ValueError('没有可用补签券，请前往 RBC 商店购买')
         error.error_code = 'INSUFFICIENT_MAKEUP_TICKETS'
@@ -239,11 +248,11 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
         except (ValueError,TypeError):raise ValueError('购买请求编号无效')
         prior=Purchase.objects.filter(request_id=token).first()
         if prior:
-            if prior.member_id!=member.pk or prior.item_id!=item_id or prior.quantity!=quantity:
+            if prior.user_id!=member.user_id or prior.item_id!=item_id or prior.quantity!=quantity:
                 raise ValueError('购买请求编号已被使用')
             return {'success':True,'total_price':prior.total_price,'duplicate':True}
     try:
-        item = ShopItem.objects.select_for_update().get(pk=item_id, team=member.team, is_active=True)
+        item = ShopItem.objects.select_for_update().get(pk=item_id, is_active=True)
     except ShopItem.DoesNotExist:
         raise ValueError("商品不存在或已下架")
 
@@ -256,10 +265,10 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
 
     # The item lock serializes purchases and limit edits before counting history.
     if item.item_type == 'physical' and item.purchase_limit:
-        purchased = Purchase.objects.filter(item=item, member__user_id=member.user_id).aggregate(total=Sum('quantity'))['total'] or 0
+        purchased = Purchase.objects.filter(item=item, user_id=member.user_id).aggregate(total=Sum('quantity'))['total'] or 0
         from .models import ShopFulfillment
         purchased -= ShopFulfillment.objects.filter(purchase__item=item,
-            purchase__member__user_id=member.user_id,status='reclaimed').count()
+            purchase__user_id=member.user_id,status='reclaimed').count()
         if purchased + quantity > item.purchase_limit:
             raise ValueError(f'已达购买上限：每人累计限购{item.purchase_limit}件，已购买{purchased}件')
 
@@ -297,12 +306,7 @@ def purchase_item(member, item_id, quantity=1, request_id=None):
 
     # Add to inventory for consumable items
     if item.item_type in ["makeup_ticket", "consumable"]:
-        inventory, created = UserInventory.objects.get_or_create(
-            team=member.team,
-            member=member,
-            item=item,
-            defaults={"quantity": 0}
-        )
+        inventory, created = account_inventory(member, item)
         inventory = UserInventory.objects.select_for_update().get(pk=inventory.pk)
         inventory.quantity += quantity
         inventory.save()
@@ -345,6 +349,7 @@ def get_transaction_history(member, limit=50):
         'tip__sender_user__account_closure')[:limit]
 
 
+@transaction.atomic
 def initialize_default_currency_config(team):
     """Initialize default currency configuration for a team"""
     # Create default streak rewards
@@ -376,11 +381,20 @@ def initialize_default_currency_config(team):
         defaults={"reward": 5, "is_ak": True}
     )
 
+    # Serialize global default product creation across team initialization.
+    User.objects.select_for_update().order_by('pk').first()
     # Create default makeup ticket item
+    from .models import ShopCategory
+    from django.db.models import Max
+    if ShopItem.objects.filter(item_type='makeup_ticket').exists():
+        return
+    last = ShopCategory.objects.all().aggregate(last=Max('position'))['last']
+    ticket_category, _ = ShopCategory.objects.get_or_create(name='道具', defaults={'position': 0 if last is None else last + 1})
     ShopItem.objects.get_or_create(
-        team=team,
         item_type="makeup_ticket",
         defaults={
+            "team": team,
+            "category": ticket_category,
             "name": "补签券",
             "description": "使用补签券开放学期内历史日期的一次提交权限，提交记录后完成补签",
             "price": 3,

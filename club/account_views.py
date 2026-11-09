@@ -161,10 +161,10 @@ def close_account(request,user_id=None):
 
 def account_detail(user):
     data=account_data(user)
-    data['inventory']=list(UserInventory.objects.filter(member__user=user).select_related('item','team').values('id','item_id','quantity','item__name','item__item_type','team__name'))
-    data['units']=list(ShopFulfillment.objects.filter(purchase__member__user=user).values('id','item_name','status','purchase__team__name'))
+    data['inventory']=list(UserInventory.objects.filter(user=user).select_related('item','team').values('id','item_id','quantity','item__name','item__item_type','team__name'))
+    data['units']=list(ShopFulfillment.objects.filter(purchase__user=user).values('id','item_name','status','purchase__team__name'))
     teams=list(user.team_memberships.values_list('team_id',flat=True))
-    data['items']=list(ShopItem.objects.filter(team_id__in=teams,is_active=True).values('id','name','team_id','team__name'))
+    data['items']=list(ShopItem.objects.filter(is_active=True).values('id','name','team_id','team__name'))
     return data
 
 
@@ -180,18 +180,7 @@ def account_inventory(request,user_id):
         for key in ('inventory_id','unit_id','item_id'):
             if key in data:data[key]=positive_id(data[key])
     except ValueError as exc:return api_error(str(exc))
-    member=None
-    if data.get('action')=='quantity':
-        inv=UserInventory.objects.filter(pk=data.get('inventory_id'),member__user=user).select_related('member').first()
-        member=inv.member if inv else None
-    elif data.get('action')=='revoke':
-        unit=ShopFulfillment.objects.filter(pk=data.get('unit_id'),purchase__member__user=user).select_related('purchase__member').first()
-        member=unit.purchase.member if unit else None
-    elif data.get('action')=='grant':
-        item=ShopItem.objects.filter(pk=data.get('item_id')).first()
-        member=user.team_memberships.filter(team_id=item.team_id).first() if item else None
-    if not member:return api_error('未找到该账号的物品或对应团队身份',404)
     from .member_management import inventory_settings
     request.global_inventory_user_id=user.pk
-    response=inventory_settings(request,member.team_id,member.pk)
+    response=inventory_settings(request,None,None)
     return private(account_detail(user)) if response.status_code==200 else response

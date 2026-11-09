@@ -130,7 +130,9 @@ class ShopFulfillmentTests(TestCase):
         self.assertEqual(available_stock(item), -1)
 
     def test_admin_card_setup_append_only_and_no_secret_echo(self):
-        data = {'name': 'Cards', 'price': 2, 'stock': -1, 'item_type': 'redeem_code', 'card_source': 'inventory', 'card_codes': 'A\nB\nA'}
+        from .models import ShopCategory
+        category = ShopCategory.objects.create(name='Test cards')
+        data = {'category_id': category.pk, 'name': 'Cards', 'price': 2, 'stock': -1, 'item_type': 'redeem_code', 'card_source': 'inventory', 'card_codes': 'A\nB\nA'}
         result = self.post(self.admin, '/api/currency/admin/shop', data)
         self.assertEqual(result.status_code, 200)
         item = ShopItem.objects.get(pk=result.json()['item_id'])

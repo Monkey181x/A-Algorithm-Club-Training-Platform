@@ -136,11 +136,13 @@ def ensure_available(user_id,item,quantity):
     return entries
 
 
-def award(member,item,quantity,purchase=None):
+def award(member,item,quantity,purchase=None,*,user=None):
     from datetime import timedelta
-    entries=ensure_available(member.user_id,item,quantity)
-    prior={kind:owned_records(member.user_id,kind) for kind in {c['kind'] for c in entries}}
-    inventory,_=UserInventory.objects.get_or_create(team=item.team,member=member,item=item)
+    user_id=user.pk if user is not None else member.user_id
+    entries=ensure_available(user_id,item,quantity)
+    prior={kind:owned_records(user_id,kind) for kind in {c['kind'] for c in entries}}
+    from .currency_services import account_inventory
+    inventory,_=account_inventory(member,item,user=user)
     now=timezone.now()
     source_prior={(g.kind,g.key):(g.expires_at,g.definition) for g in CosmeticGrant.objects.filter(active_term(now),inventory=inventory)} if inventory.quantity>0 else {}
     if inventory.quantity<=0:
@@ -155,10 +157,10 @@ def award(member,item,quantity,purchase=None):
             # permanent grant on this independently revocable source.
             previous=source_prior.get((kind,key))
         if previous and previous[0] is None:
-            CosmeticGrant.objects.update_or_create(user_id=member.user_id,inventory=inventory,kind=kind,key=key,defaults={'expires_at':None,'definition':previous[1]})
+            CosmeticGrant.objects.update_or_create(user_id=user_id,inventory=inventory,kind=kind,key=key,defaults={'expires_at':None,'definition':previous[1]})
             snapshots.append({**previous[1],'duration_days':days,'expires_at':None,'already_permanent':True});continue
         end=max(now,previous[0] if previous else now)+timedelta(days=days) if days else None
-        CosmeticGrant.objects.update_or_create(user_id=member.user_id,inventory=inventory,kind=kind,key=key,defaults={'expires_at':end,'definition':definition})
+        CosmeticGrant.objects.update_or_create(user_id=user_id,inventory=inventory,kind=kind,key=key,defaults={'expires_at':end,'definition':definition})
         snapshots.append({**definition,'expires_at':end.isoformat() if end else None})
     if purchase:
         purchase.cosmetic_snapshot=snapshots;purchase.save(update_fields=['cosmetic_snapshot'])
@@ -175,4 +177,4 @@ def gift_badge_data(item):return catalog('badge').get(item.gift_badge_key) if it
 
 def award_purchase_badge(purchase):
     badge=gift_badge_data(purchase.item)
-    if badge:PurchaseBadgeGrant.objects.get_or_create(user_id=purchase.member.user_id,key=badge['key'],defaults={'purchase':purchase,'definition':badge})
+    if badge:PurchaseBadgeGrant.objects.get_or_create(purchase=purchase,key=badge['key'],defaults={'user_id':purchase.user_id,'definition':badge})

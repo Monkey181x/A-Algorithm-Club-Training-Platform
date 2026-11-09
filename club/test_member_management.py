@@ -170,7 +170,8 @@ class MemberManagementTests(TestCase):
         self.assertFalse(Purchase.objects.filter(member=self.member).exists())
         item.refresh_from_db();self.assertEqual(item.stock,2)
         foreign=ShopItem.objects.create(team=self.other,name='Foreign',price=1)
-        self.assertEqual(self.inventory({'action':'grant','item_id':foreign.pk,'quantity':1,'request_id':str(uuid.uuid4())}).status_code,404)
+        self.assertEqual(self.inventory({'action':'grant','item_id':foreign.pk,'quantity':1,'request_id':str(uuid.uuid4())}).status_code,200)
+        self.assertTrue(UserInventory.objects.filter(user=self.member.user,item=foreign,quantity=1).exists())
 
     def test_physical_grant_starts_dispatching_without_charging_coins(self):
         item=ShopItem.objects.create(team=self.team,name='Gift',price=5,stock=2,item_type='physical')

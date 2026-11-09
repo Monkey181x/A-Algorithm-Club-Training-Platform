@@ -422,6 +422,7 @@ const CurrencyModule = (() => {
     }
   }
 
+  let shopCategories = [];
   // Load shop items
   async function loadShopItems() {
     try {
@@ -431,6 +432,7 @@ const CurrencyModule = (() => {
 
       if (response.ok) {
         const data = await response.json();
+        shopCategories = data.categories || [];
         return data.items;
       }
       return [];
@@ -467,12 +469,23 @@ const CurrencyModule = (() => {
     } finally { consumableUsesInFlight.delete(inventoryId); }
   }
   let shopRenderVersion = 0;
-  function applyShopCategory(container,category=container.dataset.shopCategory||'all') {
+  function applyShopCategory(container,category) {
+    const backpack=container.dataset.shopTab==='inventory';
+    category=category ?? container.dataset.shopCategory ?? 'all';
+    if(category!=='all' && !shopCategories.some(c=>String(c.id)===category))category='all';
     container.dataset.shopCategory=category;
-    const decorations=new Set(['title','badge','theme','frame','cosmetic']),kinds={physical:new Set(['physical']),redeem:new Set(['redeem_code']),tools:new Set(['general','consumable','makeup_ticket']),decorations};let visible=0;
-    container.querySelectorAll('[data-shop-kind]').forEach(card=>{card.hidden=Boolean(kinds[category]&&!kinds[category].has(card.dataset.shopKind));if(!card.hidden)visible++;});
+    let visible=0;
+    container.querySelectorAll('[data-shop-kind]').forEach(card=>{
+      const ids=(card.dataset.shopCategoryIds||'').split(',');
+      card.hidden=category!=='all' && !ids.includes(category);
+      if(!card.hidden)visible++;
+    });
     container.querySelectorAll('[data-shop-category]').forEach(button=>{const selected=button.dataset.shopCategory===category;button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));});
-    const empty=container.querySelector('[data-category-empty]');if(empty)empty.hidden=visible>0;
+    const empty=container.querySelector('[data-category-empty]');
+    if(empty){
+      empty.hidden=visible>0;
+      empty.textContent=category==='all' ? (backpack?'背包里还没有物品':'暂无商品') : (backpack?'该分类下暂无物品':'该分类下暂无上架商品');
+    }
   }
   function bindShopCategories(container){
     container.querySelectorAll('[data-shop-category]').forEach(button=>button.onclick=()=>applyShopCategory(container,button.dataset.shopCategory));
@@ -516,9 +529,10 @@ const CurrencyModule = (() => {
       backpack ? window.clubApi.request('/api/currency/inventory').then(async response => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '背包加载失败');
-        return data.inventory || [];
-      }).then(items => ({items}), error => ({error:error.message})) : {items:[]}]);
+        return {items:data.inventory || [], categories:data.categories || []};
+      }).then(result => result, error => ({error:error.message})) : {items:[]}]);
     if (version !== shopRenderVersion) return;
+    if (backpack && inventoryResult.categories) shopCategories=inventoryResult.categories;
     const displayItems = backpack ? (inventoryResult.items || []).map(item => ({
       ...item, id:item.item_id, name:item.item_name,
     })) : items;
@@ -545,10 +559,10 @@ const CurrencyModule = (() => {
           <button class="segment ${!backpack ? 'active' : ''}" type="button" data-shop-tab="shop">商店</button>
           <button class="segment ${backpack ? 'active' : ''}" type="button" data-shop-tab="inventory">背包</button>
         </div>
-        <div class="shop-categories" role="group" aria-label="商品分类"><button type="button" data-shop-category="all">全部</button><button type="button" data-shop-category="decorations">装扮</button><button type="button" data-shop-category="physical">实物</button><button type="button" data-shop-category="redeem">核销</button><button type="button" data-shop-category="tools">道具</button></div>
+        <div class="shop-categories" role="group" aria-label="商品分类"><button type="button" data-shop-category="all">全部</button>${shopCategories.map(c=>`<button type="button" data-shop-category="${escape(c.id)}">${escape(c.name)}</button>`).join('')}</div>
         <div class="shop-grid">
           ${backpack && inventoryResult.error ? `<div class="empty-state" role="alert">${escape(inventoryResult.error)}<button class="text-button" data-inventory-retry type="button">重试</button></div>` : displayItems.length === 0 ? `<div class="empty-state">${backpack ? '背包里还没有物品' : '暂无商品'}</div>` : displayItems.map(item => `
-            <div data-shop-kind="${escape(item.item_type)}" class="shop-item-card${item.item_type === 'title' ? ' shop-title-card' : ''}${!backpack && item.purchase_limit_reached ? ' is-limit-reached' : ''}${!backpack && item.purchase_blocked && !item.title_owned && !item.cosmetic_owned ? ' is-purchase-blocked' : ''}">
+            <div data-shop-category-ids="${escape((item.category_ids || [item.category_id]).filter(Boolean).join(','))}" data-shop-kind="${escape(item.item_type)}" class="shop-item-card${item.item_type === 'title' ? ' shop-title-card' : ''}${!backpack && item.purchase_limit_reached ? ' is-limit-reached' : ''}${!backpack && item.purchase_blocked && !item.title_owned && !item.cosmetic_owned ? ' is-purchase-blocked' : ''}">
               ${!backpack && item.purchase_limit_reached ? '<img class="shop-limit-stamp" src="/static/images/purchase-limit-stamp.png" alt="已达购买上限" />' : ''}
               <div class="shop-item-icon${item.icon ? ' is-image-loading' : ''}" ${item.icon ? `data-shop-image="${escape(item.icon)}" data-image-alt="${escape(item.name)}" aria-busy="true"` : ''}>
                 ${item.icon ? '<span class="skeleton shop-image-placeholder" aria-hidden="true"></span>' : ['theme','cosmetic'].includes(item.item_type)&&window.CosmeticMedia?.safe(item.cosmetic?.poster||item.cosmetic?.background||item.cosmetic?.icon)?`<img class="shop-cosmetic-cover ${item.cosmetic.kind==='theme'?'':'is-decoration-icon'}" src="${escape(item.cosmetic.poster||item.cosmetic.background||item.cosmetic.icon)}" alt="装扮预览">`:item.item_type==='badge'?`<span class="shop-cosmetic-badge">${window.MemberTitles.badgeMarkup(item.cosmetic||{key:item.cosmetic_key})}</span>`:'<span class="placeholder-icon">📦</span>'}
@@ -588,7 +602,7 @@ const CurrencyModule = (() => {
               </div>
             </div>
           `).join('')}
-          ${displayItems.length?'<div class="empty-state" data-category-empty hidden>暂无装扮</div>':''}
+          ${displayItems.length?'<div class="empty-state" data-category-empty hidden>该分类下暂无商品</div>':''}
         </div>
       </section>
     `;
