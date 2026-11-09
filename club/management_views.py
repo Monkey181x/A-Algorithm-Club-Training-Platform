@@ -109,15 +109,11 @@ def delete_team_data(team):
     names = set(SubmissionPart.objects.filter(submission__team=team).exclude(upload='').values_list('upload', flat=True))
     for pending in CleanupJob.objects.filter(semester__team=team).values_list('pending_files', flat=True):
         names.update(pending)
-    names.update(ShopItem.objects.filter(team=team).exclude(icon='').values_list('icon',flat=True))
     names.update(ContestSubmission.objects.filter(team=team).exclude(screenshot='').values_list('screenshot',flat=True))
     if team.currency_icon:names.add(team.currency_icon.name)
     FileDeletion.objects.bulk_create([FileDeletion(name=name) for name in names if name])
     ReviewLog.objects.filter(submission__team=team).delete()
-    # Explicit whole-team deletion removes team-owned purchase/inventory rows
-    # before their PROTECT references to shop items are collected.
-    UserInventory.objects.filter(team=team).delete()
-    Purchase.objects.filter(team=team).delete()
+    # Shop assets and account-owned orders survive removal of their source team.
     team.delete()
 
 

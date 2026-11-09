@@ -138,11 +138,11 @@ def create_fulfillments(purchase, codes):
 def fulfillment_inventory(member):
     return [{'id': 'fulfillment-' + str(unit.pk), 'fulfillment_id': unit.pk,
         'item_id': unit.purchase.item_id, 'item_name': unit.item_name,
-        'description': unit.purchase.item.description, 'item_type': unit.purchase.item.item_type,
+        'category_id': unit.purchase.item.category_id, 'description': unit.purchase.item.description, 'item_type': unit.purchase.item.item_type,
         'quantity': 1, 'api_num': unit.api_num, 'status': unit.status, 'icon': '/api/currency/shop/items/' + str(unit.purchase.item_id) + '/icon' if unit.purchase.item.icon else None,
         'purchased_at': unit.purchase.purchased_at.isoformat(), 'can_redeem': unit.status == 'ready',
         'code': key_cipher().decrypt(unit.encrypted_code.encode()).decode() if unit.status == 'redeemed' and unit.encrypted_code else None}
-        for unit in ShopFulfillment.objects.filter(purchase__member__user_id=member.user_id).select_related('purchase__item').order_by('-pk')]
+        for unit in ShopFulfillment.objects.filter(purchase__user_id=member.user_id).select_related('purchase__item').order_by('-pk')]
 
 
 @api_login_required
@@ -161,12 +161,12 @@ def use_consumable(request, inventory_id):
     if not TeamMembership.objects.select_for_update().filter(pk=member.pk, is_active=True).exists():
         return api_error('当前成员权限已失效', 403)
     inventory = UserInventory.objects.select_for_update(of=('self',)).filter(pk=inventory_id,
-        member__user_id=member.user_id, item__item_type='consumable').select_related('item').first()
+        user_id=member.user_id, item__item_type='consumable').select_related('item').first()
     if not inventory:
         return api_error('消耗品不存在', 404)
     prior = ShopFulfillment.objects.filter(request_key=token).select_related('purchase').first()
     if prior:
-        if prior.purchase.member.user_id != member.user_id or prior.purchase.item_id != inventory.item_id:
+        if prior.purchase.user_id != member.user_id or prior.purchase.item_id != inventory.item_id:
             return api_error('使用请求编号已被使用', 409)
         return private_json({'ok': True, 'duplicate': True, 'status': prior.status, 'fulfillment_id': prior.pk})
     if inventory.quantity < 1:
@@ -174,7 +174,7 @@ def use_consumable(request, inventory_id):
     # Existing consumables already have purchase history but no per-unit fulfillment.
     # Allocate one unused purchase unit on demand, keeping old backpacks usable.
     from django.db.models import Count, F
-    purchase = Purchase.objects.filter(member=inventory.member, item=inventory.item).annotate(
+    purchase = Purchase.objects.filter(user_id=inventory.user_id, item=inventory.item).annotate(
         used_units=Count('fulfillments')).filter(quantity__gt=F('used_units')).order_by('pk').first()
     if not purchase:
         return api_error('物品购买记录不完整，请联系管理员', 409)
@@ -229,7 +229,7 @@ def redeem(request, unit_id):
     if not owner.is_active or not TeamMembership.objects.select_for_update().get(pk=member.pk).is_active:
         return api_error('当前成员权限已失效', 403)
     unit = ShopFulfillment.objects.select_for_update(of=('self',)).filter(pk=unit_id,
-        purchase__member__user_id=member.user_id).select_related('purchase__item').first()
+        purchase__user_id=member.user_id).select_related('purchase__item').first()
     if not unit or unit.purchase.item.item_type != 'redeem_code':
         return api_error('物品不存在', 404)
     if unit.status == 'redeemed':
@@ -280,7 +280,7 @@ def dispatch_inbox(request):
     if request.method == 'GET':
         rows = query.filter(status='dispatching').select_related('purchase__member', 'purchase__team', 'purchase__item').order_by('pk')
         return private_json({'pending_count': rows.count(), 'orders': [{'id': unit.pk, 'item_name': unit.item_name,
-            'member_name': unit.purchase.member.display_name, 'team_name': unit.purchase.team.name,
+            'member_name': (unit.purchase.member.display_name if unit.purchase.member else unit.purchase.user.username), 'team_name': (unit.purchase.team.name if unit.purchase.team else '原团队已删除'),
             'item_type': unit.purchase.item.item_type, 'purchased_at': unit.purchase.purchased_at.isoformat()} for unit in rows[:200]]})
     with transaction.atomic():
         from .currency_services import positive_id
@@ -289,7 +289,7 @@ def dispatch_inbox(request):
         except ValueError as error:
             return api_error(str(error), 400)
         candidate = query.select_related('purchase').filter(pk=identity).first()
-        if candidate:
+        if candidate and candidate.purchase.member_id:
             TeamMembership.objects.select_for_update().get(pk=candidate.purchase.member_id)
         unit = query.select_for_update(of=('self',)).select_related('purchase__item').filter(pk=identity).first()
         if not unit:

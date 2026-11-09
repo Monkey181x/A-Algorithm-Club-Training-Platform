@@ -14,7 +14,7 @@ class ExtensionTests(TestCase):
         self.admin()
         image = io.BytesIO()
         Image.new('RGBA', (20, 20), (255, 0, 0, 0)).save(image, 'PNG')
-        response = self.client.post('/api/extensions', {'title':'透明封面', 'kind':'link',
+        response = self.client.post('/api/extensions', {'category':'library','title':'透明封面', 'kind':'link',
             'url':'https://example.com', 'cover':SimpleUploadedFile('transparent.png', image.getvalue(), content_type='image/png')})
         self.assertEqual(response.status_code, 200)
         cover = self.client.get(response.json()['item']['cover'])
@@ -36,7 +36,7 @@ class ExtensionTests(TestCase):
 
     def test_files_cover_replace_delete(self):
         self.admin()
-        response = self.client.post('/api/extensions', {'title':'下载资料', 'kind':'file',
+        response = self.client.post('/api/extensions', {'category':'library','title':'下载资料', 'kind':'file',
             'file': SimpleUploadedFile('算法.txt', b'hello'), 'cover':self.image()})
         self.assertEqual(response.status_code, 200, response.content)
         item = response.json()['item']; path = '/api/extensions/' + str(item['id'])
@@ -48,7 +48,7 @@ class ExtensionTests(TestCase):
         self.client.logout()
         self.assertEqual(self.client.get(item['href']).status_code, 401)
         self.client.force_login(self.root)
-        self.assertEqual(self.client.post(path, {'title':'链接', 'kind':'link','url':'https://example.com', 'remove_cover':'1'}).status_code, 200)
+        self.assertEqual(self.client.post(path, {'category':'library','title':'链接', 'kind':'link','url':'https://example.com', 'remove_cover':'1'}).status_code, 200)
         self.assertEqual(FileDeletion.objects.count(), 2)
         self.assertEqual(self.client.get(item['href']).status_code, 404)
         self.assertEqual(self.client.delete(path).status_code, 200)
@@ -56,10 +56,10 @@ class ExtensionTests(TestCase):
 
     def test_validation_and_edit_preserve_file(self):
         self.admin()
-        for payload in [{'title':'X', 'kind':'link', 'url':'javascript:alert(1)'}, {'title':'X','kind':'file'}, {'title':'X','kind':'link','url':'https://example.com','cover':SimpleUploadedFile('fake.png', b'bad')}]:
+        for payload in [{'category':'library','title':'X', 'kind':'link', 'url':'javascript:alert(1)'}, {'category':'library','title':'X','kind':'file'}, {'category':'library','title':'X','kind':'link','url':'https://example.com','cover':SimpleUploadedFile('fake.png', b'bad')}]:
             self.assertEqual(self.client.post('/api/extensions', payload).status_code, 400)
-        item = self.client.post('/api/extensions', {'title':'X','kind':'file','file':SimpleUploadedFile('a.txt',b'a')}).json()['item']
-        response = self.client.post('/api/extensions/'+str(item['id']), {'title':'Y','kind':'file'})
+        item = self.client.post('/api/extensions', {'category':'library','title':'X','kind':'file','file':SimpleUploadedFile('a.txt',b'a')}).json()['item']
+        response = self.client.post('/api/extensions/'+str(item['id']), {'category':'library','title':'Y','kind':'file'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['item']['filename'], 'a.txt')
 
@@ -67,12 +67,12 @@ class ExtensionTests(TestCase):
         self.assertEqual(self.client.get('/api/extensions').json()['poker_category'], 'games')
         self.assertEqual(self.client.post('/api/extensions/builtin/poker', {'category': 'library'}).status_code, 403)
         self.admin()
-        payload = {'title': '练习', 'kind': 'link', 'url': 'https://example.com'}
+        payload = {'category':'library','title': '练习', 'kind': 'link', 'url': 'https://example.com'}
         item = self.client.post('/api/extensions', payload).json()['item']
         self.assertEqual(item['category'], 'library')
         path = '/api/extensions/' + str(item['id'])
         self.assertEqual(self.client.post(path, {**payload, 'category': 'games'}).json()['item']['category'], 'games')
-        self.assertEqual(self.client.post(path, payload).json()['item']['category'], 'games')
+        self.assertEqual(self.client.post(path, payload).json()['item']['category'], 'library')
         self.assertEqual(self.client.post(path, {**payload, 'category': 'bad'}).status_code, 400)
         self.assertEqual(self.client.post('/api/extensions/builtin/poker', {'category': 'bad'}).status_code, 400)
         self.assertEqual(self.client.post('/api/extensions/builtin/poker', {'category': 'library'}).status_code, 200)

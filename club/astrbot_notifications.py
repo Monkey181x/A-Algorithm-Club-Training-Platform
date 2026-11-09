@@ -69,6 +69,8 @@ def notify_purchase(purchase):
 
 def notify_item_use(unit):
     purchase = unit.purchase
+    if not purchase.team_id or not purchase.member_id:
+        return
     queue_notification(
         f"item-use:{unit.pk}",
         "item_used",

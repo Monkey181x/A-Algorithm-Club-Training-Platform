@@ -25,7 +25,7 @@ class PendantBadgeTests(TestCase):
         token=uuid.uuid4()
         for _ in range(2):purchase_item(self.member,self.item.pk,2,token)
         purchase_item(self.member,self.item.pk,1,uuid.uuid4())
-        self.assertEqual(PurchaseBadgeGrant.objects.filter(user=self.user).count(),1)
+        self.assertEqual(PurchaseBadgeGrant.objects.filter(user=self.user).count(),2)
         self.assertEqual(Purchase.objects.filter(item=self.item).count(),2)
         self.assertEqual(list(Purchase.objects.filter(item=self.item).values_list('fulfillments__status',flat=True)),['dispatching']*3)
         self.assertFalse(UserInventory.objects.filter(member=self.member,item=self.item).exists())

@@ -80,6 +80,7 @@ const CurrencyAdminModule = (() => {
     }
   }
 
+  let shopCategories = [];
   // Load shop items for admin
   async function loadShopItems() {
     try {
@@ -89,6 +90,7 @@ const CurrencyAdminModule = (() => {
 
       if (response.ok) {
         const data = await response.json();
+        shopCategories = data.categories || [];
         return data.items;
       }
       return [];
@@ -271,7 +273,7 @@ const CurrencyAdminModule = (() => {
     container.innerHTML = `
       <div class="shop-management-panel">
         <div class="panel-header">
-          <h3>RBC商店管理</h3><button type="button" id="manageCosmetics" class="secondary-button">装扮管理 / 主题包</button>
+          <h3>RBC商店管理</h3><button type="button" id="manageShopCategories" class="secondary-button">管理分类</button><button type="button" id="manageCosmetics" class="secondary-button">装扮管理 / 主题包</button>
           <button type="button" id="addShopItem" class="primary-button">+ 添加商品</button>
         </div>
 
@@ -282,18 +284,18 @@ const CurrencyAdminModule = (() => {
                 <th>商品名称</th>
                 <th>价格</th>
                 <th>库存</th>
-                <th>类型</th>
+                <th>分类</th><th>类型</th>
                 <th>状态</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              ${items.length === 0 ? '<tr><td colspan="6" class="empty-state">暂无商品</td></tr>' : items.map(item => `
+              ${items.length === 0 ? '<tr><td colspan="7" class="empty-state">暂无商品</td></tr>' : items.map(item => `
                 <tr>
                   <td>${escape(item.name)}</td>
                   <td>${item.price} RBC</td>
                   <td>${item.stock === -1 ? '无限' : item.stock}</td>
-                  <td>${({general:'普通商品',makeup_ticket:'补签券',consumable:'消耗品',redeem_code:'核销类',physical:'实物类',title:'称号',badge:'徽章',theme:'主题',frame:'头像框',cosmetic:'装扮套装'})[item.item_type] || escape(item.item_type)}</td>
+                  <td>${escape(shopCategories.find(c => c.id === item.category_id)?.name || '未分类')}</td><td>${({general:'普通商品',makeup_ticket:'补签券',consumable:'消耗品',redeem_code:'核销类',physical:'实物类',title:'称号',badge:'徽章',theme:'主题',frame:'头像框',cosmetic:'装扮套装'})[item.item_type] || escape(item.item_type)}</td>
                   <td>${item.is_active ? '上架' : '下架'}</td>
                   <td>
                     <button type="button" class="toggle-item-btn secondary-button" data-item-id="${item.id}" data-active="${item.is_active}">${item.is_active?'下架':'上架'}</button>
@@ -308,6 +310,7 @@ const CurrencyAdminModule = (() => {
       </div>
     `;
 
+    container.querySelector("#manageShopCategories").onclick=()=>manageShopCategories(container);
     container.querySelector("#manageCosmetics").onclick=()=>window.CosmeticStudio.open();
     // Attach handlers
     container.querySelector("#addShopItem").addEventListener("click", () => showItemEditModal());
@@ -334,8 +337,38 @@ const CurrencyAdminModule = (() => {
     });
   }
 
+  function manageShopCategories(container) {
+    const el = document.createElement('dialog'); el.className = 'extension-dialog';
+    el.innerHTML = `<h2>管理商店分类</h2><p>上移、下移后自动保存。只有空分类可以删除，已下架商品也计入数量。</p><div class="extension-category-list">${shopCategories.map((c,i) => `<div><span>${escape(c.name)}（${c.count} 件）</span><div class="extension-category-actions"><button data-id="${c.id}" data-action="up" ${i===0?'disabled':''}>上移</button><button data-id="${c.id}" data-action="down" ${i===shopCategories.length-1?'disabled':''}>下移</button><button data-id="${c.id}" data-action="delete" ${c.count?'disabled':''}>删除</button></div></div>`).join('')}</div><form class="extension-form"><label>分类名称<input name="name" required maxlength="30"></label><button type="submit" class="primary-button">添加分类</button></form><p role="alert"></p><div class="extension-actions"><button data-close type="button">关闭</button></div>`;
+    document.body.append(el); el.showModal(); el.onclose=()=>el.remove();
+    el.querySelector('[data-close]').onclick=()=>el.close();
+    let busy=false;
+    el.addEventListener('cancel', e=>{if(busy)e.preventDefault();});
+    async function save(payload, method='POST') {
+      if(busy)return; busy=true;
+      const buttons=[...el.querySelectorAll('button')], disabled=buttons.map(b=>b.disabled);
+      buttons.forEach(b=>b.disabled=true);
+      try {
+        const response=await window.clubApi.request('/api/currency/admin/shop/categories',{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const data=await response.json(); if(!response.ok)throw Error(data.error||'保存失败');
+        el.close(); await renderShopManagementPanel(container); manageShopCategories(container);
+      } catch(error) {el.querySelector('[role=alert]').textContent=error.message;}
+      finally {busy=false;buttons.forEach((b,i)=>b.disabled=disabled[i]);}
+    }
+    el.querySelector('form').onsubmit=e=>{e.preventDefault();save({name:new FormData(e.target).get('name')});};
+    el.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{
+      const category_id=Number(button.dataset.id), action=button.dataset.action;
+      if(action==='delete') {
+        const category=shopCategories.find(c=>c.id===category_id);
+        if(!window.confirm(`确定删除空分类“${category.name}”？`))return;
+        save({category_id},'DELETE');
+      } else save({category_id,action:'move',direction:action});
+    });
+  }
+
   // Show item edit modal
   function showItemEditModal(item = null) {
+    if (!shopCategories.length) { alert('请先在管理分类中添加分类'); return; }
     const isEdit = !!item;
 
     const modal = document.createElement("div");
@@ -369,6 +402,7 @@ const CurrencyAdminModule = (() => {
             <input type="number" id="itemStock" value="${item?.stock !== undefined ? item.stock : -1}" />
           </div>
           <div class="form-group">
+            <label>显示分类<select id="itemCategory" required><option value="" disabled ${!item?.category_id ? 'selected' : ''}>请选择分类</option>${shopCategories.map(c => `<option value="${c.id}" ${item?.category_id === c.id ? 'selected' : ''}>${escape(c.name)}</option>`).join('')}</select></label>
             <label>商品类型</label>
             <select id="itemType">
               <optgroup label="装扮"><option value="cosmetic" ${item?.item_type==='cosmetic'?'selected':''}>主题 / 徽章 / 头像框 / 自选套装</option><option value="title" ${item?.item_type==='title'?'selected':''}>称号</option>${['theme','badge','frame'].includes(item?.item_type)?`<option value="${item.item_type}" selected>原有${({theme:'主题',badge:'徽章',frame:'头像框'})[item.item_type]}商品</option>`:''}</optgroup>
@@ -472,6 +506,7 @@ const CurrencyAdminModule = (() => {
       }
 
       const itemData = {
+        category_id: Number(modal.querySelector("#itemCategory").value),
         name: document.getElementById("itemName").value.trim(),
         description: document.getElementById("itemDescription").value.trim(),
         price: parseInt(document.getElementById("itemPrice").value),
@@ -483,6 +518,7 @@ const CurrencyAdminModule = (() => {
         allow_multiple_purchase: modal.querySelector('#itemType').value==='redeem_code' && modal.querySelector('#itemCardSource').value==='api' && modal.querySelector('#itemAllowMultiplePurchase').checked,
       };
 
+      if (!itemData.category_id) { alert('请选择分类'); return; }
       if(!Number.isInteger(itemData.purchase_limit)||itemData.purchase_limit<0||itemData.purchase_limit>2147483647){alert('限购数量必须为0（不限购）或正整数');return;}
       itemData.cosmetic_duration_days=['title','theme','badge','frame'].includes(itemData.item_type)&&modal.querySelector('#cosmeticTermMode').value==='days'?Number(modal.querySelector('#cosmeticDays').value):0;
       if(!Number.isInteger(itemData.cosmetic_duration_days)||itemData.cosmetic_duration_days<0||itemData.cosmetic_duration_days>36500||(modal.querySelector('#cosmeticTermMode').value==='days'&&['title','theme','badge','frame'].includes(itemData.item_type)&&itemData.cosmetic_duration_days===0)){alert('请填写 1–36500 天的整数时长');return;}

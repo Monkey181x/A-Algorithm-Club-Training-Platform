@@ -10,3 +10,28 @@ html[data-site-mode="dark"] #extensionsView .extension-tile .extension-copy stro
 html[data-site-mode="dark"] #extensionsView .extension-tile .extension-copy small,html[data-site-mode="dark"] #extensionsView .extension-tile .extension-copy>span{color:#d1dfd7!important}
 
 .extension-wall>[hidden]{display:none}.extension-wall .poker-entry{width:100%;height:100%;border:0;cursor:pointer}
+
+/* Keep resource text in normal flow so long names and descriptions stay readable. */
+#extensionsView .extension-wall{grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));align-items:stretch}
+#extensionsView .extension-tile{aspect-ratio:auto}
+#extensionsView .extension-wall>.extension-tile:not([hidden]){display:flex;flex-direction:column}
+#extensionsView .extension-link,#extensionsView .poker-entry{display:flex;flex-direction:column;flex:1;height:auto;min-width:0;padding:0;text-align:left}
+#extensionsView .extension-link>img,#extensionsView .extension-placeholder{display:block;flex:none;width:100%;height:160px;object-fit:cover;padding:0;box-sizing:border-box}
+#extensionsView .extension-placeholder{display:grid;place-items:center}
+#extensionsView .extension-copy{position:static;inset:auto;flex:1;justify-content:flex-start;width:100%;height:auto;min-width:0;overflow:visible;padding:16px;gap:8px;border-radius:0;box-sizing:border-box}
+#extensionsView .extension-copy small,#extensionsView .extension-copy strong,#extensionsView .extension-copy>span{display:block;height:auto;overflow:visible;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;-webkit-line-clamp:unset;line-height:1.5}
+#extensionsView .extension-copy strong{font-size:18px}
+#extensionsView .extension-copy>span{font-size:14px}
+@media(max-width:540px){#extensionsView .extension-wall{grid-template-columns:1fr}}
+
+#extensionsView .extension-filters{max-width:100%;overflow-x:auto;flex-wrap:nowrap;box-sizing:border-box}
+#extensionsView .extension-filters .segment{flex-shrink:0;white-space:nowrap}
+.extension-heading-actions{display:flex;gap:10px;flex-wrap:wrap}
+.extension-category-list{display:grid;gap:10px;margin:18px 0;max-height:35vh;overflow:auto}
+.extension-category-list>div{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.extension-category-list span{overflow-wrap:anywhere;min-width:0}
+.extension-category-list button{flex-shrink:0}
+.extension-category-list button:disabled{opacity:.45;cursor:not-allowed}
+
+.extension-category-actions{display:flex;gap:6px;flex-shrink:0}
+@media(max-width:540px){.extension-category-list>div{flex-wrap:wrap}}

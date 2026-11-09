@@ -6,11 +6,12 @@ from PIL import Image, ImageOps
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.db.models import Max
 from django.http import JsonResponse, FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
-from .models import ExtensionResource, FileDeletion, BuiltinExtensionCategory
+from .models import ExtensionResource, FileDeletion, BuiltinExtensionCategory, ExtensionCategory
 from .views import api_login_required, api_error, membership_for
 
 
@@ -33,6 +34,7 @@ def resources(request, resource_id=None):
     if request.method == 'GET':
         return JsonResponse({'items': [data(i) for i in ExtensionResource.objects.all()],
                              'poker_category': BuiltinExtensionCategory.objects.filter(key='poker').values_list('category', flat=True).first() or 'games',
+                             'categories': category_data(),
                              'can_manage': request.user.is_superuser})
     if not request.user.is_superuser:
         return api_error('仅系统管理员可管理资源', 403)
@@ -44,8 +46,8 @@ def resources(request, resource_id=None):
             item.delete()
         return JsonResponse({'ok': True})
     category = request.POST.get('category')
-    if category is not None and category not in ('library', 'games'):
-        return api_error('请选择资料库或小游戏')
+    if not ExtensionCategory.objects.filter(key=category).exists():
+        return api_error('请选择有效分类')
     title = request.POST.get('title', '').strip()
     description = request.POST.get('description', '').strip()
     kind = request.POST.get('kind')
@@ -75,6 +77,8 @@ def resources(request, resource_id=None):
     stored = []
     try:
         with transaction.atomic():
+            if not ExtensionCategory.objects.select_for_update().filter(key=category).first():
+                return api_error('分类已删除，请刷新后重试')
             item = get_object_or_404(ExtensionResource.objects.select_for_update(), pk=resource_id) if resource_id else ExtensionResource()
             if kind == 'file' and not upload and not item.upload:
                 return api_error('请选择要下载的文件')
@@ -127,7 +131,68 @@ def builtin_category(request):
     if not request.user.is_superuser:
         return api_error('仅系统管理员可管理资源', 403)
     category = request.POST.get('category')
-    if category not in ('library', 'games'):
-        return api_error('请选择资料库或小游戏')
-    BuiltinExtensionCategory.objects.update_or_create(key='poker', defaults={'category': category})
+    if not ExtensionCategory.objects.filter(key=category).exists():
+        return api_error('请选择有效分类')
+    with transaction.atomic():
+        if not ExtensionCategory.objects.select_for_update().filter(key=category).first():
+            return api_error('分类已删除，请刷新后重试')
+        BuiltinExtensionCategory.objects.update_or_create(key='poker', defaults={'category': category})
+    return JsonResponse({'ok': True})
+
+
+def category_data():
+    counts = {}
+    for category in ExtensionResource.objects.values_list('category', flat=True):
+        counts[category] = counts.get(category, 0) + 1
+    for category in BuiltinExtensionCategory.objects.values_list('category', flat=True):
+        counts[category] = counts.get(category, 0) + 1
+    entries = [{'key': c.key, 'name': c.name, 'count': counts.get(c.key, 0)} for c in ExtensionCategory.objects.all()]
+    return entries
+
+
+@api_login_required
+@require_http_methods(['POST', 'DELETE'])
+def categories(request, category_key=None):
+    if not request.user.is_superuser:
+        return api_error('仅系统管理员可管理分类', 403)
+    if request.method == 'DELETE':
+        with transaction.atomic():
+            category = get_object_or_404(ExtensionCategory.objects.select_for_update(), key=category_key)
+            if ExtensionResource.objects.filter(category=category_key).exists() or BuiltinExtensionCategory.objects.filter(category=category_key).exists():
+                return api_error('分类中还有资源，请先将资源移到其他分类')
+            category.delete()
+        return JsonResponse({'ok': True})
+    name = request.POST.get('name', '').strip()
+    if not name or len(name) > 30 or name == '全部':
+        return api_error('请输入1至30字的分类名称，不能使用“全部”')
+    try:
+        with transaction.atomic():
+            last = ExtensionCategory.objects.aggregate(last=Max('position'))['last']
+            ExtensionCategory.objects.create(key=uuid.uuid4().hex[:16], name=name, position=0 if last is None else last + 1)
+    except IntegrityError:
+        return api_error('分类名称已存在')
+    return JsonResponse({'ok': True})
+
+
+@api_login_required
+@require_http_methods(['POST'])
+def move_category(request, category_key):
+    if not request.user.is_superuser:
+        return api_error('仅系统管理员可管理分类', 403)
+    direction = request.POST.get('direction')
+    if direction not in ('up', 'down'):
+        return api_error('请选择上移或下移')
+    with transaction.atomic():
+        # Lock in a stable key order, then apply movement to the latest saved order.
+        entries = list(ExtensionCategory.objects.select_for_update().order_by('key'))
+        entries.sort(key=lambda c: (c.position, c.key))
+        index = next((i for i, c in enumerate(entries) if c.key == category_key), None)
+        if index is None:
+            raise Http404
+        target = index + (-1 if direction == 'up' else 1)
+        if 0 <= target < len(entries):
+            entries[index], entries[target] = entries[target], entries[index]
+            for position, entry in enumerate(entries):
+                entry.position = position
+            ExtensionCategory.objects.bulk_update(entries, ['position'])
     return JsonResponse({'ok': True})

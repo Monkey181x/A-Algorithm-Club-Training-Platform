@@ -98,7 +98,7 @@ class CurrencyIntegrationTests(TestCase):
         self.assertEqual(self.post('/api/currency/admin/adjust',{'member_id':self.member.pk,'amount':True}).status_code,400)
         self.assertEqual(self.config(currency_enabled=False).status_code,200)
         self.assertEqual(self.client.get('/api/currency/balance').status_code,200)  # Global wallet remains readable when this team's rewards/shop are disabled.
-        self.assertEqual(self.client.get('/api/currency/shop/items').status_code,403)
+        self.assertEqual(self.client.get('/api/currency/shop/items').status_code,200)
         self.assertTrue(all('currency_balance' not in r for r in self.client.get('/api/members').json()['members']))
 
     def test_icon_upload_serve_and_reject_active_svg(self):
@@ -178,10 +178,10 @@ class CurrencyIntegrationTests(TestCase):
             outsider = User.objects.create_user('image-outsider')
             TeamMembership.objects.create(team=self.other, user=outsider, display_name='Outsider')
             outsider_client = Client(); outsider_client.force_login(outsider)
-            self.assertEqual(outsider_client.get(url).status_code, 404)
+            self.assertEqual(outsider_client.get(url).status_code, 200)
             self.team.currency_enabled = False
             self.team.save(update_fields=['currency_enabled'])
-            self.assertEqual(member_client.get(url).status_code, 404)
+            self.assertEqual(member_client.get(url).status_code, 200)
             self.team.currency_enabled = True
             self.team.save(update_fields=['currency_enabled'])
             item.refresh_from_db()

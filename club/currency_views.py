@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.contrib.auth.models import User
-from django.db.models import Sum
+from django.db.models import Sum, Count
 from django.db.models.deletion import ProtectedError
 from django.http import JsonResponse, FileResponse, Http404
 from django.utils import timezone
@@ -25,7 +25,7 @@ from .views import api_login_required, api_error, body, membership_for
 from .models import (
     CurrencyBalance, CurrencyTransaction, CheckinRecord,
     StreakReward, ContestRewardConfig, ContestSubmission,
-    ShopItem, Purchase, UserInventory, TeamMembership, Team, FileDeletion
+    ShopCategory, ShopItem, Purchase, UserInventory, TeamMembership, Team, FileDeletion
 )
 from .currency_config import config_data, validate_config, apply_config, currency_icon_url
 from .currency_descriptions import ledger_description
@@ -223,9 +223,9 @@ def shop_item_icon_url(item):
 @require_http_methods(["GET", "HEAD"])
 def api_shop_item_icon(request, item_id):
     item = ShopItem.objects.select_related('team').filter(pk=item_id).first()
-    if not item or not item.icon or not item.team.currency_enabled:
+    if not item or not item.icon:
         raise Http404
-    if not membership_for(request, item.team_id) and not UserInventory.objects.filter(member__user=request.user,item=item).exists() and not Purchase.objects.filter(member__user=request.user,item=item).exists():
+    if not membership_for(request) and not UserInventory.objects.filter(user=request.user,item=item).exists() and not Purchase.objects.filter(user=request.user,item=item).exists():
         raise Http404
     image_file = None
     try:
@@ -257,19 +257,17 @@ def api_shop_items(request):
     if not member:
         return api_error("未找到团队成员信息", 404)
 
-    if not member.team.currency_enabled:
-        return api_error("该团队未启用货币系统", 403)
 
     from .shop_fulfillment import available_stock
     from .grades import is_retired
     retired = is_retired(request.user.pk)
-    items = ShopItem.objects.filter(team=member.team, is_active=True)
-    purchased = dict(Purchase.objects.filter(item__team=member.team, member__user_id=request.user.pk)
+    items = ShopItem.objects.filter(is_active=True)
+    purchased = dict(Purchase.objects.filter(user_id=request.user.pk)
                      .order_by().values('item_id').annotate(total=Sum('quantity')).values_list('item_id', 'total'))
     from .models import ShopFulfillment
     from django.db.models import Count
-    for row in ShopFulfillment.objects.filter(purchase__item__team=member.team,
-            purchase__member__user_id=request.user.pk,status='reclaimed').values('purchase__item_id').annotate(total=Count('id')):
+    for row in ShopFulfillment.objects.filter(
+            purchase__user_id=request.user.pk,status='reclaimed').values('purchase__item_id').annotate(total=Count('id')):
         item_id = row['purchase__item_id']
         purchased[item_id] = max(0,purchased.get(item_id,0)-row['total'])
 
@@ -316,6 +314,7 @@ def api_shop_items(request):
         "stock": available_stock(item),
         "allow_multiple_purchase": bool(item.item_type == 'redeem_code' and item.card_source == 'api' and item.allow_multiple_purchase),
         "item_type": item.item_type,
+        "category_id": item.category_id,
         "cosmetic_duration_days":item.cosmetic_duration_days, "gift_badge":gift_badge_data(item),
         "title_definition": title_preview(item),
         "title_owned": owns_title(item),
@@ -327,7 +326,7 @@ def api_shop_items(request):
         "purchase_block_reason": appearance_block(item) or ('大三+用户不可购买实物类商品' if item.item_type == 'physical' and retired else ''),
     } for item in items]
 
-    return JsonResponse({"items": data})
+    return JsonResponse({"items": data, "categories": shop_categories_data(member.team)})
 
 
 @api_login_required
@@ -338,8 +337,6 @@ def api_shop_purchase(request):
     if not member:
         return api_error("未找到团队成员信息", 404)
 
-    if not member.team.currency_enabled:
-        return api_error("该团队未启用货币系统", 403)
     if not member.pk or request.user.is_superuser:
         return api_error("系统管理员当前为管理预览，无法购买商品", 403)
 
@@ -379,7 +376,7 @@ def api_user_inventory(request):
         return api_error("未找到团队成员信息", 404)
 
     inventory_items = UserInventory.objects.filter(
-        member__user_id=member.user_id,
+        user_id=member.user_id,
         quantity__gt=0
     ).select_related('item','owned_title').prefetch_related('cosmetic_grants')
 
@@ -390,6 +387,7 @@ def api_user_inventory(request):
         "item_name": inv.item.name,
         "description": inv.item.description,
         "item_type": inv.item.item_type,
+        "category_id": inv.item.category_id,
         "cosmetic_key":inv.item.cosmetic_key,"cosmetic":product_data(inv.item),"components":[{**g.definition,"expires_at":g.expires_at.isoformat() if g.expires_at else None} for g in inv.cosmetic_grants.all() if g.definition],"expires_at":inventory_expiry(inv),
         "title_definition": getattr(inv,'owned_title',None).definition if inv.item.item_type == 'title' and getattr(inv,'owned_title',None) else {},
         "quantity": inv.quantity,
@@ -406,7 +404,18 @@ def api_user_inventory(request):
             data.append({'id':'gift-'+badge['key'],'item_id':'gift-'+badge['key'],'item_name':badge['name'],'description':'购买附赠徽章，永久赠品可独立于称号佩戴。','item_type':'badge','cosmetic_key':badge['key'],'cosmetic':badge,'expires_at':badge.get('expires_at'),'quantity':1,'can_use':False,'icon':badge['icon']})
     for frame in available(member.user_id,'frame'):
         data.append({'id':'gift-frame-'+frame['key'],'item_id':'gift-frame-'+frame['key'],'item_name':frame['name'],'description':'主题附赠头像框','item_type':'frame','cosmetic_key':frame['key'],'cosmetic':frame,'expires_at':frame.get('expires_at'),'quantity':1,'can_use':False,'icon':frame['icon']})
-    response=JsonResponse({"inventory": data})
+    from .models import CosmeticGrant, PurchaseBadgeGrant
+    gift_categories = {}
+    for grant in CosmeticGrant.objects.filter(active_term(), user_id=member.user_id, inventory__quantity__gt=0).select_related('inventory__item'):
+        gift_categories.setdefault((grant.kind, grant.key), set()).add(grant.inventory.item.category_id)
+    for grant in PurchaseBadgeGrant.objects.filter(user_id=member.user_id).select_related('purchase__item'):
+        gift_categories.setdefault(('badge', grant.key), set()).add(grant.purchase.item.category_id)
+    for entry in data:
+        if entry['item_type'] == 'badge' or str(entry['id']).startswith('gift-'):
+            categories = set(gift_categories.get((entry['item_type'], entry['cosmetic_key']), set()))
+            categories.add(entry.get('category_id'))
+            entry['category_ids'] = sorted(c for c in categories if c is not None)
+    response=JsonResponse({"inventory": data, "categories": shop_categories_data(member.team)})
     response["Cache-Control"]="private, no-store"
     return response
 
@@ -518,17 +527,17 @@ def api_currency_icon(request, team_id):
 def api_admin_shop_items(request):
     member=membership_for(request)
     if not request.user.is_superuser or not member:return api_error('需要管理员权限',403)
-    if not member.team.currency_enabled:return api_error('该团队未启用货币系统',403)
     if request.method=='GET':
         from .shop_fulfillment import admin_card_data
         return JsonResponse({'items':[{**admin_card_data(i),'id':i.pk,'name':i.name,'description':i.description,'price':i.price,
-            'stock':i.stock,'is_active':i.is_active,'item_type':i.item_type,'title_definition':i.title_definition,'cosmetic_key':i.cosmetic_key,'cosmetic_duration_days':i.cosmetic_duration_days,'gift_badge_key':i.gift_badge_key,'cosmetic':product_data(i),'cosmetic_bundle':i.cosmetic_bundle,'purchase_limit':i.purchase_limit,'icon':shop_item_icon_url(i)} for i in ShopItem.objects.filter(team=member.team)]})
+            'category_id':i.category_id,'stock':i.stock,'is_active':i.is_active,'item_type':i.item_type,'title_definition':i.title_definition,'cosmetic_key':i.cosmetic_key,'cosmetic_duration_days':i.cosmetic_duration_days,'gift_badge_key':i.gift_badge_key,'cosmetic':product_data(i),'cosmetic_bundle':i.cosmetic_bundle,'purchase_limit':i.purchase_limit,'icon':shop_item_icon_url(i)} for i in ShopItem.objects.all()], 'categories': shop_categories_data(member.team)})
+    User.objects.select_for_update().order_by('pk').first()
     data=body(request)
     if request.method=='POST':item=ShopItem(team=member.team,price=1)
     else:
         try:identity=positive_id(data.get('item_id'))
         except ValueError as exc:return api_error(str(exc))
-        item=ShopItem.objects.select_for_update().filter(pk=identity,team=member.team).first()
+        item=ShopItem.objects.select_for_update().filter(pk=identity).first()
         if not item:return api_error('商品不存在',404)
     if request.method=='DELETE':
         try:
@@ -537,6 +546,11 @@ def api_admin_shop_items(request):
             if name:FileDeletion.objects.create(name=name)
         except ProtectedError:return api_error('商品已有购买记录或用户库存，请改为下架以保留历史记录',409)
         return JsonResponse({'success':True})
+    if request.method == 'POST' or 'category_id' in data:
+        category_id = data.get('category_id')
+        if type(category_id) is not int or not ShopCategory.objects.filter(pk=category_id).exists():
+            return api_error('请选择有效分类')
+        item.category_id = category_id
     values={key:data.get(key,getattr(item,key)) for key in ['name','description','price','stock','is_active','item_type','purchase_limit','cosmetic_duration_days','gift_badge_key']}
     if not isinstance(values['name'],str) or not 1<=len(values['name'].strip())<=100:return api_error('商品名称需为1–100字')
     if not isinstance(values['description'],str):return api_error('商品说明格式无效')
@@ -610,3 +624,48 @@ def api_admin_shop_items(request):
     if old and item.icon.name!=old:FileDeletion.objects.create(name=old)
     append_codes(item,codes)
     return JsonResponse({'success':True,'item_id':item.pk})
+
+
+def shop_categories_data(team):
+    return list(ShopCategory.objects.all().annotate(count=Count('items')).order_by('position', 'id').values('id', 'name', 'count'))
+
+
+@api_login_required
+@require_http_methods(['POST', 'DELETE'])
+@transaction.atomic
+def api_admin_shop_categories(request):
+    member = membership_for(request)
+    if not request.user.is_superuser or not member:
+        return api_error('需要管理员权限', 403)
+    User.objects.select_for_update().order_by('pk').first()
+    data = body(request)
+    entries = list(ShopCategory.objects.all())
+    if request.method == 'DELETE' or data.get('action') == 'move':
+        identity = data.get('category_id')
+        category = next((c for c in entries if type(identity) is int and c.pk == identity), None)
+        if category is None:
+            return api_error('分类不存在', 404)
+        if request.method == 'DELETE':
+            if category.items.exists():
+                return api_error('分类中还有商品（包括已下架商品），请先调整商品归属')
+            category.delete()
+        else:
+            direction = data.get('direction')
+            if direction not in ('up', 'down'):
+                return api_error('请选择上移或下移')
+            index = entries.index(category)
+            target = index + (-1 if direction == 'up' else 1)
+            if 0 <= target < len(entries):
+                entries[index], entries[target] = entries[target], entries[index]
+                for position, entry in enumerate(entries):
+                    entry.position = position
+                ShopCategory.objects.bulk_update(entries, ['position'])
+    else:
+        name = data.get('name')
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 30 or name.strip() == '全部':
+            return api_error('请输入1至30字的分类名称，不能使用“全部”')
+        name = name.strip()
+        if ShopCategory.objects.filter(name=name).exists():
+            return api_error('分类名称已存在')
+        ShopCategory.objects.create(team=member.team, name=name, position=max((c.position for c in entries), default=-1) + 1)
+    return JsonResponse({'success': True})
