@@ -80,7 +80,7 @@ html[data-site-theme-active=true][data-special-theme=taffy] body .app-shell{back
 #rbcshopView .shop-item-card{border-radius:18px}#rbcshopView .shop-item-card[hidden]{display:none!important}
 #rbcshopView .shop-item-icon{height:108px}#rbcshopView .shop-cosmetic-cover{height:108px;max-width:100%;max-height:100%;border-radius:0;object-fit:cover}
 #rbcshopView .shop-item-info{padding:12px}#rbcshopView .shop-item-info h3{font-size:15px;line-height:1.4;margin-bottom:6px}
-#rbcshopView .shop-item-info p{font-size:12px;line-height:1.6;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#rbcshopView .shop-item-info p{font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 #rbcshopView .shop-item-footer{padding:11px 12px;gap:8px;flex-wrap:wrap}#rbcshopView .shop-item-footer button{font-size:12px;padding:8px 12px}
 #rbcshopView .shop-title-preview{min-height:65px;margin-bottom:8px}#rbcshopView .cosmetic-preview-button{font-size:12px;margin-block:6px;padding:7px 10px}
 #rbcshopView .shop-cosmetic-badge .member-icon-badge{width:54px;height:54px;margin:0}
