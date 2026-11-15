@@ -10,6 +10,7 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
 from .management_views import administrator_required
+from .notification_config import qualification_admission_years
 from .views import api_login_required, api_error, body
 from .models import CurrencyBalance, CurrencyTransaction, UserInventory, ShopFulfillment, ShopItem, AccountClosure, TeamMembership, UserProfile, FileDeletion, SubmissionReport, AstrBotNotification, Semester, SemesterMemberTotal, ContestSyncState
 
@@ -61,6 +62,16 @@ def update_account(request,user_id):
             if not user:return api_error('账号不存在',404)
             if user.is_superuser or user.first_name=='CLUB_TEST_SANDBOX' or AccountClosure.objects.filter(user=user).exists():
                 return api_error('该账号不可在此修改',403)
+            if data.get('action') == 'qualification_reminder':
+                enabled = data.get('qualification_reminder_enabled')
+                if type(enabled) is not bool:
+                    return api_error('达标提醒开关必须为布尔值')
+                updated = UserProfile.objects.filter(
+                    user=user, admission_year__in=qualification_admission_years()
+                ).update(qualification_reminder_enabled=enabled)
+                if not updated:
+                    return api_error('该账号不在当前达标提醒分队，请刷新账号资料', 409)
+                return private({'qualification_reminder_enabled': enabled})
             if data.get('action')=='balance':
                 value=data.get('balance')
                 if type(value) is not int or not -2147483648<=value<=2147483647:return api_error('余额需为 -2147483648 至 2147483647 的整数')
@@ -161,6 +172,12 @@ def close_account(request,user_id=None):
 
 def account_detail(user):
     data=account_data(user)
+    if not data['closed'] and not user.is_superuser:
+        reminder_enabled = UserProfile.objects.filter(
+            user=user, admission_year__in=qualification_admission_years()
+        ).values_list('qualification_reminder_enabled', flat=True).first()
+        if reminder_enabled is not None:
+            data['qualification_reminder_enabled'] = reminder_enabled
     data['inventory']=list(UserInventory.objects.filter(member__user=user).select_related('item','team').values('id','item_id','quantity','item__name','item__item_type','team__name'))
     data['units']=list(ShopFulfillment.objects.filter(purchase__member__user=user).values('id','item_name','status','purchase__team__name'))
     teams=list(user.team_memberships.values_list('team_id',flat=True))

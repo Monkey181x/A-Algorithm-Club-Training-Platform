@@ -1,5 +1,5 @@
 /* Keep the small daisyUI component bundle aligned with the site's live theme. */
-#tmNotifications {
+:is(#tmNotifications, #gmQualificationReminder) {
   --color-base-100: var(--site-surface, var(--panel));
   --color-base-200: var(--site-fill, var(--canvas));
   --color-base-300: var(--site-border, var(--line));
@@ -18,13 +18,14 @@
 .notification-intro .muted { margin: 8px 0 0; }
 #tmNotifications .notification-section { display: grid; gap: 12px; min-width: 0; margin: 0 0 22px; padding: 18px; border: 1px solid var(--site-border, var(--line)); border-radius: var(--site-inner-radius, 14px); }
 #tmNotifications .notification-section legend { font-size: calc(15px * var(--site-ui-scale, 1)); font-weight: 700; padding-inline: 6px; }
-#tmNotifications .notification-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 56px; cursor: pointer; }
+:is(#tmNotifications, #gmQualificationReminder) .notification-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 56px; cursor: pointer; }
 #tmNotifications .notification-toggle-row + .notification-toggle-row { padding-top: 12px; border-top: 1px solid var(--site-border, var(--line)); }
-#tmNotifications .notification-toggle-row input { flex-shrink: 0; }
-#tmNotifications .nt-toggle { min-width: 44px; min-height: 24px; }
+:is(#tmNotifications, #gmQualificationReminder) .notification-toggle-row input { flex-shrink: 0; }
+:is(#tmNotifications, #gmQualificationReminder) .nt-toggle { min-width: 44px; min-height: 24px; }
 /* The appearance theme uses important input fills; checked switches must remain distinct. */
-#teamManagementDialog #tmNotifications .nt-toggle:checked { color: var(--site-button-text, #fff) !important; background-color: var(--site-accent, var(--teal)) !important; border-color: var(--site-accent, var(--teal)) !important; }
-#tmNotifications .notification-toggle-row strong { font-size: calc(14px * var(--site-ui-scale, 1)); font-weight: 600; }
+:is(#teamManagementDialog #tmNotifications, #globalAccountsDialog #gmQualificationReminder) .nt-toggle:checked { color: var(--site-button-text, #fff) !important; background-color: var(--site-accent, var(--teal)) !important; border-color: var(--site-accent, var(--teal)) !important; }
+:is(#tmNotifications, #gmQualificationReminder) .notification-toggle-row strong { font-size: calc(14px * var(--site-ui-scale, 1)); font-weight: 600; }
+#gmQualificationReminder .notification-toggle-row small { display: block; margin-top: 4px; }
 #tmNotifications .notification-master { gap: 12px; }
 #tmNotifications .notification-section .muted { margin: 0; overflow-wrap: anywhere; }
 #tmNotifications .notification-actions { display: flex; flex-wrap: wrap; gap: 10px; }

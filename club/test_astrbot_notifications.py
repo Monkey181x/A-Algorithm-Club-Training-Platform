@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
@@ -197,6 +198,56 @@ class NotificationTests(TestCase):
             ends_on=now.date() + timedelta(days=7),
         )
         return now
+
+    @patch("club.astrbot_notifications.requests.post")
+    def test_account_reminder_opt_out_applies_to_queued_and_pending_weekly_notices(self, post):
+        now = self.weekly_time()
+        older = self.cohort_member("older", 2024)
+        opted_out = self.cohort_member("opted-out", 2025)
+        pending = self.cohort_member("pending", 2026)
+        remaining = self.cohort_member("remaining", 2026)
+        self.client.force_login(User.objects.get(username="admin"))
+
+        field = "qualification_reminder_enabled"
+
+        def account_url(member):
+            return f"/api/management/accounts/{member.user_id}"
+
+        def set_reminder(member, enabled):
+            return self.client.patch(
+                account_url(member),
+                json.dumps({"action": "qualification_reminder", field: enabled}),
+                content_type="application/json",
+            )
+
+        self.assertNotIn(field, self.client.get(account_url(older)).json())
+        self.assertEqual(set_reminder(older, False).status_code, 409)
+        self.assertTrue(self.client.get(account_url(opted_out)).json()[field])
+        self.assertEqual(set_reminder(opted_out, "false").status_code, 400)
+        self.assertFalse(set_reminder(opted_out, False).json()[field])
+        self.assertFalse(self.client.get(account_url(opted_out)).json()[field])
+        self.assertEqual(queue_weekly_reminders(now), 1)
+        row = AstrBotNotification.objects.get()
+        self.assertEqual(
+            {m["member_id"] for m in row.payload["data"]["members"]},
+            {pending.pk, remaining.pk},
+        )
+        row.next_attempt_at = timezone.now() - timedelta(seconds=1)
+        row.save(update_fields=["next_attempt_at"])
+        post.side_effect = requests.Timeout()
+        self.assertEqual(deliver_pending(), 0)
+        self.assertFalse(set_reminder(pending, False).json()[field])
+        row.next_attempt_at = timezone.now() - timedelta(seconds=1)
+        row.save(update_fields=["next_attempt_at"])
+        post.side_effect = None
+        post.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+        self.assertEqual(deliver_pending(), 1)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual([m["member_id"] for m in payload["data"]["members"]], [remaining.pk])
+        self.assertNotIn(pending.display_name, payload["text"])
+        row.refresh_from_db()
+        self.assertEqual(row.payload["text"], payload["text"])
+        self.assertTrue(set_reminder(opted_out, True).json()[field])
 
     def test_latest_registered_cohort_moves_window_across_the_site(self):
         now = self.weekly_time()

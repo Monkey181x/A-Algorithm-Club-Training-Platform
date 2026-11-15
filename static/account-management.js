@@ -38,6 +38,26 @@ window.AccountManagement=(()=>{
         await request(url,payload,method);if(id===selectedId)await selectAccount(id);notify('已保存');
       }catch(error){notify(error.message);}finally{button.disabled=false;}
     });
+    accountDialog.addEventListener('change', async event => {
+      const toggle = event.target;
+      if (!toggle.matches('[data-gm-qualification-reminder]')) return;
+      const id = selectedId;
+      const enabled = toggle.checked;
+      toggle.disabled = true;
+      try {
+        const saved = await request(`/api/management/accounts/${id}`, {
+          action: 'qualification_reminder',
+          qualification_reminder_enabled: enabled,
+        }, 'PATCH');
+        toggle.checked = saved.qualification_reminder_enabled;
+        notify('达标提醒设置已保存');
+      } catch (error) {
+        toggle.checked = !enabled;
+        notify(error.message);
+      } finally {
+        toggle.disabled = false;
+      }
+    });
   }
   function closeAccounts(){accountDialog.classList.remove('open');accountDialog.setAttribute('aria-hidden','true');document.querySelector('[data-open-global-accounts]')?.focus();}
   async function openAccounts(){initAccounts();accountDialog.classList.add('open');accountDialog.setAttribute('aria-hidden','false');await loadAccounts();$('#wbAccountSearch').focus();}
@@ -62,6 +82,13 @@ window.AccountManagement=(()=>{
     const states={ready:'待核销',redeemed:'已核销',dispatching:'派发中',delivered:'派送成功',reclaimed:'已收回'};
     $('#gmDetail').innerHTML=`<header class="tm-member-heading"><h3>${esc(user.account)}</h3><span class="account-state">${user.closed?'已注销':user.system_admin?'系统管理员':'全局账号'}</span></header><section class="tm-card"><h4>团队身份</h4><div class="gm-team-list">${user.teams.map(team=>`<div><span><strong>${esc(team.name)}</strong><small>${esc(team.display_name)} · ${team.role==='admin'?'团队管理员':'普通成员'}${team.active?'':' · 已退出'}</small></span>${team.active&&editable?`<button type="button" class="secondary-button" data-gm-team="${team.id}" data-gm-member="${team.member_id}">管理团队身份</button>`:''}</div>`).join('')||'<p class="muted">尚未加入团队</p>'}</div></section>
       ${editable?`<form class="tm-card tm-form" data-gm-form="account"><h4>登录账号</h4><label>账号<input name="account" value="${esc(user.account)}" minlength="3" maxlength="150" required></label><label>设置新密码<input name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="留空保留当前密码"></label><div class="tm-actions"><button class="primary-button" type="submit">保存账号设置</button></div></form>`:''}
+      ${editable && typeof user.qualification_reminder_enabled === 'boolean' ? `
+        <section id="gmQualificationReminder" class="tm-card" aria-labelledby="gmQualificationTitle">
+          <label class="notification-toggle-row">
+            <span><strong id="gmQualificationTitle">达标提醒</strong><small id="gmQualificationHint" class="muted">开启后，该用户未达标时会列入每周推送名单。</small></span>
+            <input class="nt-toggle" type="checkbox" role="switch" aria-labelledby="gmQualificationTitle" aria-describedby="gmQualificationHint" data-gm-qualification-reminder ${user.qualification_reminder_enabled ? 'checked' : ''}>
+          </label>
+        </section>` : ''}
       <form class="tm-card tm-balance" data-gm-form="balance" data-balance="${user.balance}"><div><h4>全局 RBC Coins</h4><p class="muted">所有团队共用此余额；可设置负数，后续收入先抵扣欠额</p></div><label>余额<input name="balance" type="number" min="-2147483648" max="2147483647" step="1" value="${user.balance}" required ${editable?'':'disabled'}></label>${editable?'<button class="secondary-button" type="submit">保存余额</button>':''}</form>
       <section class="tm-card"><h4>全局背包</h4><div class="tm-inventory">${user.inventory.map(inv=>`<form class="tm-inventory-row" data-gm-form="quantity" data-inventory="${inv.id}" data-item="${inv.item_id}" data-quantity="${inv.quantity}"><div><strong>${esc(inv.item__name)}</strong><small>来源：${esc(inv.team__name)}</small></div><label>保留数量<input name="quantity" type="number" min="0" max="${inv.quantity}" value="${inv.quantity}" required ${editable?'':'disabled'}></label>${editable?'<button class="secondary-button" type="submit">保存</button>':''}</form>`).join('')}${user.units.map(unit=>`<div class="tm-inventory-row"><div><strong>${esc(unit.item_name)}</strong><small>${esc(unit.purchase__team__name)} · ${esc(states[unit.status]||unit.status)}</small></div>${editable&&['ready','dispatching'].includes(unit.status)?`<button class="secondary-button" type="button" data-gm-revoke="${unit.id}">收回</button>`:''}</div>`).join('')}${!user.inventory.length&&!user.units.length?'<p class="muted">背包暂无物品</p>':''}</div>${editable&&user.items.length?`<form class="tm-grant" data-gm-form="grant"><label>发放商品<select name="item" required>${user.items.map(item=>`<option value="${item.id}">${esc(item.team__name)} · ${esc(item.name)}</option>`).join('')}</select></label><label>数量<input name="quantity" type="number" min="1" max="100" value="1" required></label><button class="primary-button" type="submit">发放到背包</button></form>`:''}</section>${editable?`<section class="tm-card"><h4>注销全局账号</h4><button type="button" class="secondary-button" data-global-account-close="${user.id}">注销账号</button></section>`:''}`;
   }

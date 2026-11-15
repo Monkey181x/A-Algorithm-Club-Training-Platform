@@ -711,6 +711,7 @@ from .pro_models import AppRateLimit, ProRedeemCode  # noqa: E402,F401
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='personal_profile')
+    qualification_reminder_enabled = models.BooleanField(default=True)
     active_theme = models.CharField(max_length=40, blank=True)
     admission_year = models.PositiveSmallIntegerField(null=True, blank=True)
     avatar = models.ImageField(upload_to='avatars/', blank=True)
