@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 import requests
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
 from django.utils import timezone
 
 from .models import (
@@ -14,9 +13,8 @@ from .models import (
     Semester,
     TeamMembership,
     TeamNotificationSettings,
-    UserProfile,
 )
-from .notification_config import EVENT_FLAGS
+from .notification_config import EVENT_FLAGS, qualification_admission_years
 from .problem_parser import key_cipher
 from .services import build_weeks, progress_rows
 
@@ -94,18 +92,23 @@ def notify_report(report, member):
     )
 
 
+def qualification_message(rows):
+    return "本周尚未达标的同学有：\n" + (
+        "\n".join(
+            f"{r['name']}（积分 {r['score']}，有效提交 {r['valid_submissions']}）"
+            for r in rows
+        )
+        if rows
+        else "无，最近两个分队本周没有需要提醒的未达标同学。"
+    )
+
+
 def queue_weekly_reminders(now=None):
     if not enabled():
         return 0
     now = now or timezone.now()
     local = now.astimezone(ZoneInfo("Asia/Shanghai"))
-    # Use registered cohorts across the site, even before they join a team.
-    latest_year = UserProfile.objects.filter(
-        user__is_superuser=False, admission_year__gte=2013
-    ).aggregate(latest=Max("admission_year"))["latest"]
-    admission_years = (
-        list(range(max(2013, latest_year - 1), latest_year + 1)) if latest_year else []
-    )
+    admission_years = qualification_admission_years()
     created = 0
     for semester in Semester.objects.filter(
         is_active=True,
@@ -139,6 +142,7 @@ def queue_weekly_reminders(now=None):
                     user__is_active=True,
                     user__is_superuser=False,
                     user__personal_profile__admission_year__in=admission_years,
+                    user__personal_profile__qualification_reminder_enabled=True,
                 ).order_by("display_name", "pk")
             )
             scores, counts = progress_rows(
@@ -154,19 +158,11 @@ def queue_weekly_reminders(now=None):
                 for m in members
                 if scores.get(m.pk, 0) < 6 or counts.get(m.pk, 0) < 4
             ]
-            text = "本周尚未达标的同学有：\n" + (
-                "\n".join(
-                    f"{r['name']}（积分 {r['score']}，有效提交 {r['valid_submissions']}）"
-                    for r in rows
-                )
-                if rows
-                else "无，最近两个分队本周没有未达标同学。"
-            )
             queue_notification(
                 key,
                 "weekly_unqualified",
                 semester.team,
-                text,
+                qualification_message(rows),
                 semester_id=semester.pk,
                 week_id=week.pk,
                 members=rows,
@@ -211,10 +207,25 @@ def deliver_pending(limit=50):
                 row.save(update_fields=["cancelled_at", "last_error"])
                 continue
             row.attempts += 1
+            payload = row.payload
+            if payload.get("event_type") == "weekly_unqualified":
+                members = payload["data"]["members"]
+                # Apply opt-outs made after queueing, including while a delivery retries.
+                opted_out = set(TeamMembership.objects.filter(
+                    pk__in=[member["member_id"] for member in members],
+                    user__personal_profile__qualification_reminder_enabled=False,
+                ).values_list("pk", flat=True))
+                if opted_out:
+                    members = [member for member in members if member["member_id"] not in opted_out]
+                    payload = {
+                        **payload,
+                        "text": qualification_message(members),
+                        "data": {**payload["data"], "members": members},
+                    }
             try:
                 response = requests.post(
                     settings.ASTRBOT_NOTIFY_URL,
-                    json={**row.payload, "event_id": str(row.pk)},
+                    json={**payload, "event_id": str(row.pk)},
                     headers={
                         "Authorization": "Bearer "
                         + key_cipher()
@@ -232,6 +243,7 @@ def deliver_pending(limit=50):
                     seconds=min(3600, 30 * 2 ** min(row.attempts, 7))
                 )
             else:
+                row.payload = payload
                 row.delivered_at = timezone.now()
                 row.last_error = ""
                 sent += 1
@@ -240,6 +252,7 @@ def deliver_pending(limit=50):
                     "attempts",
                     "next_attempt_at",
                     "last_error",
+                    "payload",
                     "delivered_at",
                 ]
             )
