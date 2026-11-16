@@ -6,6 +6,7 @@ from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from . import test_community as fixtures
+from .test_problem_titles import LUOGU_RECORD_URL, LUOGU_PROBLEM_URL, luogu_record_response
 from .models import (Problem, ProblemComparison, Submission, SubmissionPart, CheckinRecord,
                      CurrencyBalance, CurrencyTransaction, SolvedProblemCredit, DatedSolvedProblemCredit, ParserSettings)
 from .problem_parser import get_problem, resolve, ai_json
@@ -124,6 +125,39 @@ class ProblemEquivalenceTests(TestCase):
         with patch('club.problem_parser.auto_title',return_value=self.old.title),patch('club.problem_equivalence.ai_same_problem',return_value=True):
             resolve(self.new.pk,1,'auto')
         self.assertEqual(get_problem(self.new.url).pk,self.old.pk)
+
+    def test_luogu_record_resolution_uses_verified_problem_for_deduplication(self):
+        self.old.identity = 'luogu:p1001'
+        self.old.url = LUOGU_PROBLEM_URL
+        self.old.save()
+        self.new.identity = self.new.url = LUOGU_RECORD_URL
+        self.new.status = 'pending'
+        self.new.save()
+        submission = self.record(self.new, self.owner_member, timezone.localdate())
+        with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                patch('club.platform_sync.Remote.text', return_value=luogu_record_response()) as fetch, \
+                patch('club.problem_equivalence.ai_same_problem') as compare:
+            resolve(self.new.pk, 1, 'auto')
+        fetch.assert_called_once()
+        compare.assert_not_called()
+        submission.refresh_from_db()
+        self.assertEqual(submission.problem_id, self.old.pk)
+
+    def test_luogu_queued_ai_and_smart_fallback_resolve_record_only_once(self):
+        self.new.identity = self.new.url = LUOGU_RECORD_URL
+        for mode in ('ai', 'smart'):
+            with self.subTest(mode=mode):
+                self.new.status = 'pending'
+                self.new.save()
+                with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                        patch('club.platform_sync.Remote.text', return_value=luogu_record_response(name=None)) as fetch, \
+                        patch('club.problem_parser.http_fetch', return_value='<title>Welcome - Luogu Spilopelia</title>'), \
+                        patch('club.problem_parser.ai_json', return_value={'title': '测试题目'}) as ai:
+                    resolve(self.new.pk, 1, mode)
+                fetch.assert_called_once()
+                self.assertEqual(ai.call_args.args[0], LUOGU_PROBLEM_URL)
+                self.new.refresh_from_db()
+                self.assertEqual((self.new.status, self.new.title), ('success', '测试题目'))
 
     def test_strict_ai_response_rejects_strings_and_unknown(self):
         for value in [None,'true',1]:

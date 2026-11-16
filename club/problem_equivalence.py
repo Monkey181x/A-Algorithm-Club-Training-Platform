@@ -31,10 +31,10 @@ def normalized_title(title):
     return re.sub(r'\s+', '', re.sub(r'^[a-z]\s*[.、:：]\s*', '', title))
 
 
-def ai_same_problem(first, second):
+def ai_same_problem(first, second, *, first_url=None):
     from .problem_parser import ai_json
     result = ai_json(json.dumps([
-        {'url': first.url, 'title': first.title}, {'url': second.url, 'title': second.title},
+        {'url': first_url or first.url, 'title': first.title}, {'url': second.url, 'title': second.title},
     ], ensure_ascii=False), PROMPT)
     if not isinstance(result, dict) or type(result.get('same_problem')) is not bool:
         raise ValueError('AI无法确认是否同题')
@@ -178,7 +178,7 @@ def apply_comparison(problem, candidate, generation, same):
     return True
 
 
-def reconcile_problem(problem_id, generation):
+def reconcile_problem(problem_id, generation, *, verified_url=None):
     problem = Problem.objects.get(pk=problem_id)
     if (problem.canonical_id or problem.identity.startswith('sandbox:')
             or problem.generation != generation or problem.status != 'success'):
@@ -186,6 +186,16 @@ def reconcile_problem(problem_id, generation):
     candidates = Problem.objects.filter(canonical__isnull=True, submissions__isnull=False).exclude(
         pk=problem_id).exclude(title='').exclude(identity__startswith='sandbox:').distinct().order_by('pk')
     errors = []
+    if verified_url:
+        from .problem_parser import canonical_problem
+        direct = candidates.filter(identity=canonical_problem(verified_url)[0]).first()
+        if direct:
+            try:
+                if apply_comparison(problem, direct, generation, True):
+                    return
+            except ValueError as exc:
+                errors.append(str(exc))
+            candidates = candidates.exclude(pk=direct.pk)
     for candidate in candidates.iterator():
         if normalized_title(candidate.title) != normalized_title(problem.title):
             continue
@@ -193,7 +203,12 @@ def reconcile_problem(problem_id, generation):
         prior = ProblemComparison.objects.filter(first=first, second=second,
             first_title=first.title, second_title=second.title).first()
         try:
-            same = prior.same if prior else ai_same_problem(problem,candidate)
+            if prior:
+                same = prior.same
+            elif verified_url:
+                same = ai_same_problem(problem, candidate, first_url=verified_url)
+            else:
+                same = ai_same_problem(problem, candidate)
             applied = apply_comparison(problem,candidate,generation,same)
         except ValueError as exc:
             errors.append(str(exc))
