@@ -360,7 +360,7 @@ def submission_problem_url(url):
         return ''
     identity, canonical = canonical_problem(url)
     if luogu_record_id(canonical):
-        resolved = Problem.objects.filter(identity=identity, canonical__isnull=False).values_list('url', flat=True).first()
+        resolved = Problem.objects.filter(identity=identity).values_list('url', flat=True).first()
         if resolved and not luogu_record_id(resolved):
             return resolved
     return canonical

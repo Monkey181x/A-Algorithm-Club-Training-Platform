@@ -9,7 +9,7 @@ from . import test_community as fixtures
 from .test_problem_titles import LUOGU_RECORD_URL, LUOGU_PROBLEM_URL, luogu_record_response
 from .models import (Problem, ProblemComparison, Submission, SubmissionPart, CheckinRecord,
                      CurrencyBalance, CurrencyTransaction, SolvedProblemCredit, DatedSolvedProblemCredit, ParserSettings)
-from .problem_parser import get_problem, resolve, ai_json
+from .problem_parser import get_problem, resolve, ai_json, submission_problem_url
 from .problem_equivalence import reconcile_problem, ai_same_problem
 from .views import serialize_submission
 
@@ -184,6 +184,39 @@ class ProblemEquivalenceTests(TestCase):
         })
         self.assertEqual(edit.status_code, 201, edit.content)
         self.assertTrue(edit.json()['submission']['is_duplicate'])
+
+    def test_luogu_record_already_root_of_verified_problem_keeps_credits(self):
+        self.old.identity = self.old.url = LUOGU_RECORD_URL
+        self.old.save()
+        self.first.original_problem_url = LUOGU_RECORD_URL
+        self.first.save(update_fields=['original_problem_url'])
+        self.new.identity = 'luogu:p1001'
+        self.new.url = LUOGU_PROBLEM_URL
+        self.new.save()
+        self.reconcile()
+        self.new.refresh_from_db()
+        self.assertEqual(self.new.canonical_id, self.old.pk)
+
+        credit = SolvedProblemCredit.objects.create(
+            user=self.author, source='submission', problem_key=self.old.identity)
+        dated = DatedSolvedProblemCredit.objects.create(
+            user=self.author, source='submission', problem_key=self.old.identity,
+            solved_on=self.first.record_date)
+        Problem.objects.filter(pk=self.old.pk).update(status='pending', generation=1)
+        with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                patch('club.platform_sync.Remote.text', return_value=luogu_record_response()):
+            resolve(self.old.pk, 1, 'auto')
+
+        self.old.refresh_from_db()
+        self.first.refresh_from_db()
+        self.assertIsNone(self.old.canonical_id)
+        self.assertEqual((self.old.url, self.old.title), (LUOGU_PROBLEM_URL, '测试题目'))
+        self.assertEqual(self.first.original_problem_url, LUOGU_PROBLEM_URL)
+        self.assertEqual(submission_problem_url(LUOGU_RECORD_URL), LUOGU_PROBLEM_URL)
+        for link in (LUOGU_PROBLEM_URL, LUOGU_RECORD_URL):
+            self.assertEqual(get_problem(link).pk, self.old.pk)
+        self.assertTrue(SolvedProblemCredit.objects.filter(pk=credit.pk).exists())
+        self.assertTrue(DatedSolvedProblemCredit.objects.filter(pk=dated.pk).exists())
 
     def test_luogu_queued_ai_and_smart_fallback_resolve_record_only_once(self):
         for mode, record_id in (('ai', 308635759), ('smart', 308635760)):

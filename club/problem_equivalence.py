@@ -213,7 +213,9 @@ def bind_verified_problem(problem, generation, url, values):
         original_problem_url=canonical_url)
     # Keep the record identity as a lookup alias for users pasting it again.
     Problem.objects.filter(pk=source.pk).update(url=canonical_url, **values)
-    merge_problems(source, target, user_ids)
+    # A previous merge may already have chosen this record as the root.
+    if target.pk != source.pk:
+        merge_problems(source, target, user_ids)
     return target if reconcile else None
 
 
