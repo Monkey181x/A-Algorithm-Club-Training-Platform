@@ -355,6 +355,17 @@ def _get_problem(url):
     return problem
 
 
+def submission_problem_url(url):
+    if not url:
+        return ''
+    identity, canonical = canonical_problem(url)
+    if luogu_record_id(canonical):
+        resolved = Problem.objects.filter(identity=identity, canonical__isnull=False).values_list('url', flat=True).first()
+        if resolved and not luogu_record_id(resolved):
+            return resolved
+    return canonical
+
+
 def resolve(problem_id, generation, mode):
     if not Problem.objects.filter(pk=problem_id, generation=generation, status='pending', canonical__isnull=True).update(status='running'):
         return
@@ -380,10 +391,16 @@ def resolve(problem_id, generation, mode):
         except ValueError as exc:
             errors.append('AI解析：' + str(exc))
     values = {'status': 'success', 'title': title, 'error': ''} if title else {'status': 'failed', 'error': '；'.join(errors)[:500]}
-    updated = Problem.objects.filter(pk=problem_id, generation=generation, status='running', canonical__isnull=True).update(**values)
-    if updated and title:
-        from .problem_equivalence import reconcile_problem
-        if record_id:
-            reconcile_problem(problem_id, generation, verified_url=url)
+    from .problem_equivalence import bind_verified_problem, reconcile_problem
+    if record_id and url != problem.url:
+        try:
+            target = bind_verified_problem(problem, generation, url, values)
+        except ValueError as exc:
+            values = {'status': 'failed', 'error': str(exc)[:500]}
         else:
-            reconcile_problem(problem_id, generation)
+            if target:
+                reconcile_problem(target.pk, target.generation)
+            return
+    updated = Problem.objects.filter(pk=problem_id, generation=generation, status='running', canonical__isnull=True).update(**values)
+    if updated and values['status'] == 'success':
+        reconcile_problem(problem_id, generation)

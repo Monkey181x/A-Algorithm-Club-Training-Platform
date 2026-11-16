@@ -584,7 +584,7 @@ def submissions(request, submission_id=None, edit=False):
         return api_error('请刷新页面，确认提交周次后重试')
     if not membership.pk or request.user.is_superuser:
         return api_error("请以团队成员身份提交训练记录", 403)
-    from .problem_parser import canonical_problem, get_problem
+    from .problem_parser import canonical_problem, get_problem, submission_problem_url
     sandbox = bool(getattr(request, 'admin_test_mode', False))
     problem_url = request.POST.get('problem_url', '').strip()
     try:
@@ -710,13 +710,15 @@ def submissions(request, submission_id=None, edit=False):
                     return api_error('当前学期已结束或尚未开放，不能更换为其他题目', 409)
                 if week.is_closed or not week.starts_at <= now < week.ends_at:
                     return api_error('该周次已截止或尚未开放，不能更换为其他题目', 409)
-            original_url = canonical_problem(problem_url)[1] if problem_url else ''
+            original_url = submission_problem_url(problem_url)
             duplicates = Submission.objects.filter(member__user_id=request.user.pk).filter(
                 Q(original_problem_url=original_url) | Q(original_problem_url='', is_duplicate=False, problem__url=original_url))
             if submission_id is not None:
                 duplicates = duplicates.exclude(pk=submission_id)
             legacy_duplicate = previous and previous.is_duplicate and not previous.original_problem_url and previous.problem_id == problem.pk and original_url == problem.url
-            if not sandbox and not legacy_duplicate and duplicates.exists():
+            # Verified record links can now share an original URL after reconciliation.
+            same_existing_url = previous and previous.problem_id == problem.pk and previous.original_problem_url == original_url
+            if not sandbox and not (legacy_duplicate or same_existing_url) and duplicates.exists():
                 return api_error('你已提交过这个题目链接，请编辑原记录，不能重复提交相同链接', 409)
             old_problem_id = previous.problem_id if previous else None
             if submission_id is not None:
