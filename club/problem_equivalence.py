@@ -169,13 +169,54 @@ def apply_comparison(problem, candidate, generation, same):
     actual_semesters = set(Submission.objects.filter(problem_id__in=[source.pk,target.pk]).values_list('semester_id', flat=True))
     if not actual.issubset(user_ids) or not actual_semesters.issubset(semester_ids):
         raise ValueError('提交发生变化，请重新解析以确认同题')
+    merge_problems(source, target, user_ids)
+    return True
+
+
+def merge_problems(source, target, user_ids):
     Submission.objects.filter(problem=source).update(problem=target)
     move_credits(source, target)
     Problem.objects.filter(canonical=source).update(canonical=target)
     Problem.objects.filter(pk=source.pk).update(canonical=target)
     for user_id in sorted(user_ids):
         rebalance_submissions(user_id,target.pk)
-    return True
+
+
+@transaction.atomic
+def bind_verified_problem(problem, generation, url, values):
+    from .problem_parser import canonical_problem
+
+    # Use the same lock order as submission edits and AI-confirmed merges.
+    source_rows = Submission.objects.filter(problem=problem)
+    user_ids = set(source_rows.values_list('member__user_id', flat=True))
+    list(User.objects.select_for_update().filter(pk__in=user_ids).order_by('pk'))
+    affected = Submission.objects.filter(member__user_id__in=user_ids)
+    semester_ids = affected.values_list('semester_id', flat=True).distinct()
+    list(Semester.objects.select_for_update().filter(pk__in=semester_ids).order_by('pk'))
+    identity_lock()
+    source = Problem.objects.select_for_update().get(pk=problem.pk)
+    if source.generation != generation or source.status != 'running' or source.canonical_id:
+        return None
+    if source_rows.exclude(member__user_id__in=user_ids).exists():
+        raise ValueError('提交发生变化，请重新解析')
+
+    identity, canonical_url = canonical_problem(url)
+    direct, created = Problem.objects.select_for_update().get_or_create(
+        identity=identity, defaults={'url': canonical_url, **values})
+    target = root(direct)
+    reconcile = created and target.status == 'success'
+    if not created and target.pk == direct.pk and not target.title and values.get('title'):
+        Problem.objects.filter(pk=target.pk, title='').exclude(status='cancelled').update(**values)
+        target.refresh_from_db()
+        reconcile = target.status == 'success'
+    source_rows.filter(Q(original_problem_url=source.url) | Q(original_problem_url='')).update(
+        original_problem_url=canonical_url)
+    # Keep the record identity as a lookup alias for users pasting it again.
+    Problem.objects.filter(pk=source.pk).update(url=canonical_url, **values)
+    # A previous merge may already have chosen this record as the root.
+    if target.pk != source.pk:
+        merge_problems(source, target, user_ids)
+    return target if reconcile else None
 
 
 def reconcile_problem(problem_id, generation):

@@ -1,13 +1,8 @@
 #pokerView{--poker-green:#166958;--poker-gold:#eed393;--poker-muted:#698078}
 #pokerView .page-heading p:not(.kicker){margin:8px 0;color:var(--text-secondary,#64748b);font-size:14px}
-.poker-wallet{display:flex;align-items:center;gap:20px;text-align:right;flex-wrap:wrap}
-.poker-wallet-value{display:flex;flex-direction:column;gap:4px}
-.poker-wallet-actions{display:flex;gap:8px}
-@media(max-width:700px){.poker-wallet{gap:12px;text-align:left}.poker-wallet-actions .pk-btn{min-height:44px}}
-.poker-wallet strong{font-size:28px}
-.poker-wallet small,.poker-room-card small,.poker-control-info small{color:var(--text-secondary,#64748b)}
+.poker-room-card small,.poker-control-info small{color:var(--text-secondary,#64748b)}
 .poker-notice{min-height:1.4em;font-size:14px;color:var(--text-secondary,#526e75);overflow-wrap:anywhere}
-.poker-modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.poker-modes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
 .poker-mode{padding:26px!important;display:flex;align-items:flex-start;flex-direction:column;gap:18px}
 .poker-mode h2{margin:6px 0}
 .poker-mode p{margin:8px 0}
@@ -222,14 +217,6 @@ html[data-site-mode="dark"] .poker-dialog{color-scheme:dark}
 .poker-dialog button:disabled{cursor:not-allowed;opacity:.5}
 .poker-dialog [role=alert]:empty{display:none}
 .poker-dialog [role=alert]:not(:empty){padding:12px 14px;border:1px solid currentColor;border-radius:9px;font-size:13px;color:var(--pd-text)}
-.poker-dialog-balances{display:grid;grid-template-columns:1fr 1fr;margin:0;padding-bottom:18px;border-bottom:1px solid var(--pd-line);gap:20px}
-.poker-dialog-balances dt{color:var(--pd-secondary);font-size:12px;margin-bottom:8px}
-.poker-dialog-balances dd{margin:0;color:var(--pd-text);font-size:23px;font-weight:700;font-variant-numeric:tabular-nums}
-.poker-dialog-balances dd small{font-size:12px;font-weight:400}
-.poker-exchange-preview{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px;background:var(--pd-fill);border-radius:10px;color:var(--pd-text);font-size:13px}
-.poker-exchange-preview strong{font-size:25px;line-height:1.3;font-variant-numeric:tabular-nums;color:var(--pd-text)}
-.poker-exchange-preview strong small{font-size:13px;font-weight:500}
-.poker-dialog .poker-dialog-hint{font-size:12px}
 @media(max-width:540px){
   .poker-dialog{max-height:calc(100dvh - 24px);width:calc(100vw - 24px)}
   .poker-dialog-header{padding:22px 20px 18px}.poker-dialog .poker-dialog-header h2{font-size:21px}

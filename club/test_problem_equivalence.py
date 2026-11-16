@@ -6,9 +6,10 @@ from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from . import test_community as fixtures
+from .test_problem_titles import LUOGU_RECORD_URL, LUOGU_PROBLEM_URL, luogu_record_response
 from .models import (Problem, ProblemComparison, Submission, SubmissionPart, CheckinRecord,
                      CurrencyBalance, CurrencyTransaction, SolvedProblemCredit, DatedSolvedProblemCredit, ParserSettings)
-from .problem_parser import get_problem, resolve, ai_json
+from .problem_parser import get_problem, resolve, ai_json, submission_problem_url
 from .problem_equivalence import reconcile_problem, ai_same_problem
 from .views import serialize_submission
 
@@ -124,6 +125,113 @@ class ProblemEquivalenceTests(TestCase):
         with patch('club.problem_parser.auto_title',return_value=self.old.title),patch('club.problem_equivalence.ai_same_problem',return_value=True):
             resolve(self.new.pk,1,'auto')
         self.assertEqual(get_problem(self.new.url).pk,self.old.pk)
+
+    def test_luogu_record_resolution_uses_verified_problem_for_deduplication(self):
+        self.old.identity = 'luogu:p1001'
+        self.old.url = LUOGU_PROBLEM_URL
+        self.old.save()
+        self.new.identity = self.new.url = LUOGU_RECORD_URL
+        self.new.status = 'pending'
+        self.new.save()
+        submission = self.record(self.new, self.owner_member, timezone.localdate())
+        with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                patch('club.platform_sync.Remote.text', return_value=luogu_record_response()) as fetch, \
+                patch('club.problem_equivalence.ai_same_problem') as compare:
+            resolve(self.new.pk, 1, 'auto')
+        fetch.assert_called_once()
+        compare.assert_not_called()
+        submission.refresh_from_db()
+        self.assertEqual(submission.problem_id, self.old.pk)
+        self.assertEqual(serialize_submission(submission)['problem_url'], LUOGU_PROBLEM_URL)
+
+    def test_luogu_record_only_submissions_use_the_original_url_and_one_problem(self):
+        first = self.record(self.new, self.author_member, timezone.localdate())
+        second_url = 'https://www.luogu.com.cn/record/308635760'
+        second_problem = Problem.objects.create(identity=second_url, url=second_url)
+        second = self.record(second_problem, self.author_member, timezone.localdate())
+        Submission.objects.filter(pk=first.pk).update(original_problem_url=LUOGU_RECORD_URL)
+        Submission.objects.filter(pk=second.pk).update(original_problem_url=second_url)
+        Problem.objects.filter(pk=self.new.pk).update(identity=LUOGU_RECORD_URL, url=LUOGU_RECORD_URL, status='pending')
+
+        with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                patch('club.platform_sync.Remote.text', side_effect=[
+                    luogu_record_response(record_id=308635760), luogu_record_response(),
+                ]), patch('club.problem_parser.ai_json', side_effect=ValueError('AI未配置')) as ai:
+            # Resolve the later submission first, even when the AI title provider is unavailable.
+            resolve(second_problem.pk, 0, 'ai')
+            resolve(self.new.pk, 1, 'auto')
+        ai.assert_called_once()
+
+        direct = Problem.objects.get(identity='luogu:p1001')
+        self.assertEqual((direct.url, direct.title, direct.status), (LUOGU_PROBLEM_URL, '测试题目', 'success'))
+        for link in (LUOGU_PROBLEM_URL, LUOGU_RECORD_URL, second_url):
+            self.assertEqual(get_problem(link).pk, direct.pk)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual((first.problem_id, second.problem_id), (direct.pk, direct.pk))
+        self.assertTrue(first.is_valid)
+        self.assertTrue(second.is_duplicate)
+        for submission in (first, second):
+            self.assertEqual(serialize_submission(submission)['problem_url'], LUOGU_PROBLEM_URL)
+        response = self.client.post('/api/submissions', {
+            'problem_url': second_url, 'week_id': self.week.pk,
+            'proof': fixtures.CommunityTests.image(self), 'code': 'int main(){}',
+        })
+        self.assertEqual(response.status_code, 409, response.content)
+        edit = self.client.post(f'/api/submissions/{second.pk}/edit', {
+            'problem_url': LUOGU_PROBLEM_URL, 'week_id': self.week.pk, 'version': second.version,
+            'proof': fixtures.CommunityTests.image(self), 'code': 'int main(){}',
+        })
+        self.assertEqual(edit.status_code, 201, edit.content)
+        self.assertTrue(edit.json()['submission']['is_duplicate'])
+
+    def test_luogu_record_already_root_of_verified_problem_keeps_credits(self):
+        self.old.identity = self.old.url = LUOGU_RECORD_URL
+        self.old.save()
+        self.first.original_problem_url = LUOGU_RECORD_URL
+        self.first.save(update_fields=['original_problem_url'])
+        self.new.identity = 'luogu:p1001'
+        self.new.url = LUOGU_PROBLEM_URL
+        self.new.save()
+        self.reconcile()
+        self.new.refresh_from_db()
+        self.assertEqual(self.new.canonical_id, self.old.pk)
+
+        credit = SolvedProblemCredit.objects.create(
+            user=self.author, source='submission', problem_key=self.old.identity)
+        dated = DatedSolvedProblemCredit.objects.create(
+            user=self.author, source='submission', problem_key=self.old.identity,
+            solved_on=self.first.record_date)
+        Problem.objects.filter(pk=self.old.pk).update(status='pending', generation=1)
+        with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                patch('club.platform_sync.Remote.text', return_value=luogu_record_response()):
+            resolve(self.old.pk, 1, 'auto')
+
+        self.old.refresh_from_db()
+        self.first.refresh_from_db()
+        self.assertIsNone(self.old.canonical_id)
+        self.assertEqual((self.old.url, self.old.title), (LUOGU_PROBLEM_URL, '测试题目'))
+        self.assertEqual(self.first.original_problem_url, LUOGU_PROBLEM_URL)
+        self.assertEqual(submission_problem_url(LUOGU_RECORD_URL), LUOGU_PROBLEM_URL)
+        for link in (LUOGU_PROBLEM_URL, LUOGU_RECORD_URL):
+            self.assertEqual(get_problem(link).pk, self.old.pk)
+        self.assertTrue(SolvedProblemCredit.objects.filter(pk=credit.pk).exists())
+        self.assertTrue(DatedSolvedProblemCredit.objects.filter(pk=dated.pk).exists())
+
+    def test_luogu_queued_ai_and_smart_fallback_resolve_record_only_once(self):
+        for mode, record_id in (('ai', 308635759), ('smart', 308635760)):
+            with self.subTest(mode=mode):
+                link = f'https://www.luogu.com.cn/record/{record_id}'
+                record = Problem.objects.create(identity=link, url=link)
+                with patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                        patch('club.platform_sync.Remote.text', return_value=luogu_record_response(name=None, record_id=record_id)) as fetch, \
+                        patch('club.problem_parser.http_fetch', return_value='<title>Welcome - Luogu Spilopelia</title>'), \
+                        patch('club.problem_parser.ai_json', return_value={'title': '测试题目'}) as ai:
+                    resolve(record.pk, 0, mode)
+                fetch.assert_called_once()
+                self.assertEqual(ai.call_args.args[0], LUOGU_PROBLEM_URL)
+                record.refresh_from_db()
+                self.assertEqual((record.status, record.title), ('success', '测试题目'))
 
     def test_strict_ai_response_rejects_strings_and_unknown(self):
         for value in [None,'true',1]:

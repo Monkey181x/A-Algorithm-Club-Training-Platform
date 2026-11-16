@@ -1,11 +1,53 @@
+import json
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from .problem_parser import ai_title, auto_title, canonical_problem, valid_title
+from .problem_parser import ai_title, auto_title, canonical_problem, valid_title, PROMPT
 
 
 QOJ_URL = 'https://qoj.ac/problem/23602'
+LUOGU_RECORD_URL = 'https://www.luogu.com.cn/record/308635759'
+LUOGU_PROBLEM_URL = 'https://www.luogu.com.cn/problem/P1001'
+
+
+def luogu_record_response(*, pid='P1001', name='测试题目', record_id=308635759):
+    return json.dumps({'template': 'record.show', 'status': 200, 'data': {
+        'record': {'id': record_id, 'problem': {'pid': pid, 'name': name}}}})
+
+
+class LuoguRecordTitleTests(SimpleTestCase):
+    def test_automatic_uses_associated_problem_in_json_or_html(self):
+        raw = luogu_record_response()
+        for content in (raw, '<title>R308635759 - 记录详情</title>'
+                             f'<script id="lentille-context" type="application/json">{raw}</script>'):
+            with self.subTest(content=content), \
+                    patch('club.contest_progress_sources.configure_luogu') as config, \
+                    patch('club.platform_sync.Remote.text', return_value=content) as fetch:
+                self.assertEqual(auto_title('http://luogu.com.cn/record/308635759/?from=share'), '测试题目')
+                self.assertEqual(fetch.call_args.args[0], LUOGU_RECORD_URL)
+                config.assert_called_once()
+
+    def test_ai_receives_problem_url_instead_of_record_or_credentials(self):
+        with patch('club.contest_progress_sources.configure_luogu', return_value='private-cookie'), \
+                patch('club.platform_sync.Remote.text', return_value=luogu_record_response()), \
+                patch('club.problem_parser.ai_json', return_value={'title': '测试题目'}) as ai:
+            self.assertEqual(ai_title(LUOGU_RECORD_URL), '测试题目')
+        ai.assert_called_once_with(LUOGU_PROBLEM_URL, PROMPT, None)
+
+    def test_login_page_or_untrusted_metadata_is_not_interpreted_as_a_problem(self):
+        for response, error in (
+            ('{"status":401,"template":"error"}', '请先配置洛谷查询 Cookie'),
+            (luogu_record_response(record_id=1), '记录编号不匹配'),
+            (luogu_record_response(pid='../record/1'), '所属题号无效'),
+        ):
+            with self.subTest(error=error), \
+                    patch('club.contest_progress_sources.configure_luogu', return_value=''), \
+                    patch('club.platform_sync.Remote.text', return_value=response), \
+                    patch('club.problem_parser.ai_json') as ai:
+                with self.assertRaisesRegex(ValueError, error):
+                    ai_title(LUOGU_RECORD_URL)
+                ai.assert_not_called()
 
 
 class ProblemTitleTests(SimpleTestCase):
