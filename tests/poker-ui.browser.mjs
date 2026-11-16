@@ -205,7 +205,9 @@ await page.locator('[data-help]').click();assert.ok(await page.locator('.poker-r
 await page.locator('[data-lobby]').click();await page.waitForTimeout(800);assert.equal(await page.locator('.poker-flying-token').count(),0);
 await page.evaluate(()=>{PokerPreview.setSeated(false);PokerPreview.setCapacity({players:10,limit:10,available:0});});
 await page.waitForFunction(()=>document.querySelector('.poker-capacity')?.textContent.includes('人数已满'));
-assert.equal(await page.locator('[data-create]:disabled').count(),3);
+assert.deepEqual(await page.locator('[data-create]:disabled').evaluateAll(nodes=>nodes.map(n=>n.dataset.create)),['friendly','practice']);
+assert.equal(await page.getByRole('heading',{name:'多人联机',exact:true}).count(),1);
+assert.equal(await page.locator('.poker-wallet, [data-exchange]').count(),0);
 results.push({scenario:'desktop deal/bet/flop/showdown/fold/raise persistence/sound/help/lobby',errors});assert.deepEqual(errors,[]);
 await page.evaluate(()=>PokerModule.close());
 assert.equal(await page.evaluate(()=>JSON.parse(render_game_to_text()).mode),'closed');

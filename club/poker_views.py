@@ -6,7 +6,7 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
-from .models import CurrencyBalance, PokerRoom, PokerSeat, TeamMembership
+from .models import PokerRoom, PokerSeat, TeamMembership
 from .views import api_error, api_login_required, body, membership_for
 from . import poker_services as poker
 
@@ -20,8 +20,6 @@ def context(request):
 
 def response_data(room, member):
     return {'room': poker.room_data(room, member.user_id), 'user_id': member.user_id,
-            'chips': poker.chip_balance(member.user_id),
-            'balance': CurrencyBalance.objects.filter(user_id=member.user_id).values_list('balance', flat=True).first() or 0,
             'server_time': timezone.now().timestamp()}
 
 
@@ -37,35 +35,17 @@ def rooms(request):
                 room = poker.create_room(member, body(request))
                 payload = response_data(room, member)
             return JsonResponse(payload)
-        own = PokerSeat.objects.select_related('room').filter(user_id=request.user.pk).first()
-        return JsonResponse({'enabled': member.team.currency_enabled, 'user_id': request.user.pk,
-            'chips': poker.chip_balance(request.user.pk),
+        own = PokerSeat.objects.select_related('room').filter(
+            user_id=request.user.pk, room__mode__in=poker.PRACTICE_MODES).first()
+        return JsonResponse({'user_id': request.user.pk,
             'capacity': poker.capacity(),
-            'balance': CurrencyBalance.objects.filter(user_id=request.user.pk).values_list('balance', flat=True).first() or 0,
             'current_room': str(own.room_id) if own and own.room.team_id == member.team_id else None,
             'seated_elsewhere': bool(own and own.room.team_id != member.team_id),
             'rooms': [{'id': str(r.pk), 'name': r.name, 'mode': r.mode, 'max_players': r.max_players,
                        'players': r.seats.count(), 'buy_in': r.buy_in, 'big_blind': r.big_blind,
                        'playing': poker.active(r)} for r in PokerRoom.objects.filter(
-                           Q(mode__in=['coins', 'friendly']) | Q(created_by_id=request.user.pk),
+                           Q(mode='friendly') | Q(mode='practice', created_by_id=request.user.pk),
                            team=member.team, closed=False).distinct().prefetch_related('seats').order_by('created_at')]})
-    except (ValueError, TeamMembership.DoesNotExist) as exc:
-        return api_error(str(exc) or '成员信息已失效', 400)
-
-
-@api_login_required
-@require_http_methods(['POST'])
-def chips(request):
-    try:
-        member = context(request)
-        with transaction.atomic():
-            User.objects.select_for_update().get(pk=request.user.pk)
-            member = TeamMembership.objects.select_for_update(of=('self',)).select_related('team').get(pk=member.pk, is_active=True)
-            data = body(request)
-            poker.exchange_chips(member, data.get('action'), data.get('coins'))
-            payload = {'chips': poker.chip_balance(member.user_id),
-                'balance': CurrencyBalance.objects.filter(user_id=member.user_id).values_list('balance', flat=True).first() or 0}
-        return JsonResponse(payload)
     except (ValueError, TeamMembership.DoesNotExist) as exc:
         return api_error(str(exc) or '成员信息已失效', 400)
 
@@ -76,10 +56,11 @@ def room(request, room_id):
     try:
         member = context(request)
         with transaction.atomic():
-            # Same user cannot buy into two rooms in simultaneous requests.
+            # Simultaneous requests must not give one user two seats.
             User.objects.select_for_update().get(pk=request.user.pk)
             member = TeamMembership.objects.select_for_update(of=('self',)).select_related('team').get(pk=member.pk, is_active=True)
-            current = PokerRoom.objects.select_for_update().filter(pk=room_id, team_id=member.team_id).first()
+            current = PokerRoom.objects.select_for_update().filter(
+                pk=room_id, team_id=member.team_id, mode__in=poker.PRACTICE_MODES).first()
             if not current:
                 return api_error('房间不存在或无权访问', 404)
             if current.mode == 'practice' and current.created_by_id != request.user.pk:

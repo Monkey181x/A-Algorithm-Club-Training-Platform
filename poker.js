@@ -1,4 +1,4 @@
-/* Multiplayer and practice Hold'em. All deals, actions and balances are server-owned. */
+/* Free multiplayer and solo Hold'em. All deals and actions are server-owned. */
 (() => {
   const root = document.getElementById('pokerView');
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -17,11 +17,10 @@
   }
   function apply(payload) {
     state = payload;
-    if (window.CurrencyModule?.getCurrencyData().balance !== payload.balance) window.CurrencyModule?.syncBalance(payload.balance);
     if (payload.server_time) serverOffset = payload.server_time * 1000 - Date.now();
   }
-  function heading(subtitle, chips) {
-    return `<div class="poker-extension-nav"><button class="secondary-button" type="button" data-extensions>← 返回拓展</button></div><section class="page-heading"><div><h1>德州扑克</h1><p>${esc(subtitle)}</p></div><div class="poker-wallet"><div class="poker-wallet-value"><small>剩余筹码</small><strong>${count(chips)}</strong></div><div class="poker-wallet-actions"><button class="pk-btn secondary-button" type="button" data-exchange="buy" ${!lobby?.enabled ? 'disabled' : ''}>买入</button><button class="pk-btn secondary-button" type="button" data-exchange="withdraw" ${chips < 1000 ? 'disabled' : ''}>提现</button></div></div></section>`;
+  function heading(subtitle) {
+    return `<div class="poker-extension-nav"><button class="secondary-button" type="button" data-extensions>← 返回拓展</button></div><section class="page-heading"><div><h1>德州扑克</h1><p>${esc(subtitle)}</p></div></section>`;
   }
   function alertMarkup() {
     return `<p class="poker-notice" role="status" aria-live="polite">${esc(notice)}</p>`;
@@ -29,18 +28,17 @@
   function drawLobby() {
     if (fullscreen) exitGameFullscreen();
     const capacityFull = lobby.capacity?.available === 0;
-    root.innerHTML = heading('与队友同桌，或用赠送筹码练习。', lobby.chips) + alertMarkup() + `
+    root.innerHTML = heading('与队友或机器人同桌，免费开局。') + alertMarkup() + `
       ${lobby.capacity ? `<p class="poker-capacity" role="status">全站已入座 <strong>${count(lobby.capacity.players)} / ${count(lobby.capacity.limit)} 人</strong><span>${capacityFull ? '人数已满，请等待玩家离桌后再加入。' : '各团队和练习模式共用席位，机器人不占真人席位。'}</span></p>` : ''}
       ${lobby.current_room ? '<div class="poker-resume"><span>你仍在一张牌桌中，筹码会保留至离桌结算。</span><button class="primary-button" data-resume>返回当前牌桌</button></div>' : ''}
       ${lobby.seated_elsewhere ? '<p class="poker-notice">你在其他团队仍有座位，请切回对应团队离桌后再加入。</p>' : ''}
       <div class="poker-modes">
-        <article class="panel poker-mode"><span class="poker-mode-icon" aria-hidden="true">♠</span><div><p class="kicker">MULTIPLAYER</p><h2>多人联机</h2><p>2–9 人同桌 · 多房间 · 无限注</p><small>使用筹码入桌，离桌返还剩余筹码。</small></div><button class="primary-button" data-create="coins" ${!lobby.enabled || lobby.current_room || lobby.seated_elsewhere || capacityFull ? 'disabled' : ''}>创建房间</button>${!lobby.enabled ? '<small>当前团队尚未启用 RBC Coins</small>' : ''}</article>
-        <article class="panel poker-mode poker-mode-friendly"><span class="poker-mode-icon" aria-hidden="true">♣</span><div><p class="kicker">PLAY WITH FRIENDS</p><h2>多人练习</h2><p>2–9 人同桌 · 每人赠送 1,000 筹码</p><small>免费和队友联机，不使用真实 Coins，不计收入。</small></div><button class="primary-button" data-create="friendly" ${lobby.current_room || lobby.seated_elsewhere || capacityFull ? 'disabled' : ''}>创建练习房间</button></article>
+        <article class="panel poker-mode poker-mode-friendly"><span class="poker-mode-icon" aria-hidden="true">♣</span><div><p class="kicker">PLAY WITH FRIENDS</p><h2>多人联机</h2><p>2–9 人同桌 · 每人赠送 1,000 筹码</p><small>免费和队友联机，练习筹码只在本桌使用。</small></div><button class="primary-button" data-create="friendly" ${lobby.current_room || lobby.seated_elsewhere || capacityFull ? 'disabled' : ''}>创建联机房间</button></article>
         <article class="panel poker-mode poker-mode-practice"><span class="poker-mode-icon" aria-hidden="true">♧</span><div><p class="kicker">PRACTICE</p><h2>人机练习</h2><p>1–5 个机器人 · 赠送 1,000 筹码</p><small>练习筹码不可兑换，不计收入，不影响钱包。</small></div><button class="secondary-button" data-create="practice" ${lobby.current_room || lobby.seated_elsewhere || capacityFull ? 'disabled' : ''}>开始练习</button></article>
       </div>
       <div class="poker-list-heading"><h2>房间大厅</h2><button class="secondary-button" data-refresh>刷新</button></div>
-      <div class="poker-rooms">${lobby.rooms.length ? lobby.rooms.map(room => `<article class="panel poker-room-card"><div class="poker-room-title"><h3>${esc(room.name)}</h3><span class="poker-badge">${room.mode === 'practice' ? '人机练习' : room.mode === 'friendly' ? '多人练习' : room.playing ? '对局中' : '等待中'}</span></div><p>${room.players} / ${room.max_players} 人 · 盲注 ${room.big_blind / 2} / ${room.big_blind}</p><strong>${count(room.buy_in)} <small>${room.mode !== 'coins' ? '赠送筹码' : '筹码底注'}</small></strong><button class="secondary-button" data-room="${esc(room.id)}">${room.id === lobby.current_room ? '返回牌桌' : '查看房间'}</button></article>`).join('') : '<div class="panel poker-empty"><span aria-hidden="true">♠ ♥ ♣ ♦</span><h3>还没有房间</h3><p>邀请队友创建第一张牌桌，或先来一局人机练习。</p></div>'}</div>
-      <details class="panel poker-rules"><summary>玩法与结算说明</summary><p>每人两张底牌，搭配五张公共牌组成最好的五张牌。所有玩家准备后开局，依次完成翻牌前、翻牌、转牌、河牌下注。支持过牌、跟注、加注、弃牌和全下，自动处理边池与平局分池。</p>${handRankHelp}<p>每次行动限时 45 秒，超时自动过牌或弃牌。进行中的对局可以排队离桌，本手结束后结算；全下后仍参加本手比牌。断开页面超过 5 分钟将自动离桌，重新进入可恢复仍在的座位。1 Coin 可买入 1000 筹码；每满 1000 筹码可提现 1 Coin，不足部分保留。联机入桌扣除底注，离桌返还剩余筹码；买入和提现会生成钱包流水。多人练习与人机局仅使用赠送筹码，退出时不计入钱包。</p></details>`;
+      <div class="poker-rooms">${lobby.rooms.length ? lobby.rooms.map(room => `<article class="panel poker-room-card"><div class="poker-room-title"><h3>${esc(room.name)}</h3><span class="poker-badge">${room.mode === 'practice' ? '人机练习' : room.playing ? '联机对局中' : '联机等待中'}</span></div><p>${room.players} / ${room.max_players} 人 · 盲注 ${room.big_blind / 2} / ${room.big_blind}</p><strong>${count(room.buy_in)} <small>赠送筹码</small></strong><button class="secondary-button" data-room="${esc(room.id)}">${room.id === lobby.current_room ? '返回牌桌' : '查看房间'}</button></article>`).join('') : '<div class="panel poker-empty"><span aria-hidden="true">♠ ♥ ♣ ♦</span><h3>还没有房间</h3><p>邀请队友创建第一张牌桌，或先来一局人机练习。</p></div>'}</div>
+      <details class="panel poker-rules"><summary>玩法与结算说明</summary><p>每人两张底牌，搭配五张公共牌组成最好的五张牌。所有玩家准备后开局，依次完成翻牌前、翻牌、转牌、河牌下注。支持过牌、跟注、加注、弃牌和全下，自动处理边池与平局分池。</p>${handRankHelp}<p>每次行动限时 45 秒，超时自动过牌或弃牌。进行中的对局可以排队离桌，本手结束后结算；全下后仍参加本手比牌。断开页面超过 5 分钟将自动离桌，重新进入可恢复仍在的座位。练习筹码只在本桌使用，离桌后作废。</p></details>`;
     root.querySelectorAll('[data-create]').forEach(button => button.onclick = () => createDialog(button.dataset.create));
     root.querySelectorAll('[data-room]').forEach(button => button.onclick = () => enter(button.dataset.room));
     root.querySelector('[data-resume]')?.addEventListener('click', () => enter(lobby.current_room));
@@ -300,10 +298,10 @@
     const focusedRaise = root.contains(document.activeElement) && document.activeElement.matches('[data-raise]') ? '[data-raise]' : null;
     const helpOpen = !!root.querySelector('.poker-room-help:not([hidden])');
     const historyOpen = !!root.querySelector('.poker-history[open]');
-    const {room, user_id:userId, balance} = state;
-    const uid = String(userId), me = room.seats.find(s => s.user_id === uid), practice = room.mode === 'practice', gifted = room.mode !== 'coins';
+    const {room, user_id:userId} = state;
+    const uid = String(userId), me = room.seats.find(s => s.user_id === uid), practice = room.mode === 'practice';
     const playing = !['waiting','finished'].includes(room.street), actions = room.actions;
-    const actor = room.seats.find(s => s.user_id === room.actor), currency = gifted ? '练习筹码' : 'RBC Coins';
+    const actor = room.seats.find(s => s.user_id === room.actor);
     const previous = presentedRoom;
     const context = `${room.id}:${room.hand_number}:${room.actor}:${room.street}`;
     if (raiseContext !== context) { raiseDraft = null; raiseContext = context; raisePresetsOpen = false; }
@@ -315,7 +313,7 @@
     const smallBlind = participants.length === 2 ? room.dealer : clockwise[0]?.number;
     const bigBlind = participants.length === 2 ? participants.find(s=>s.number!==room.dealer)?.number : clockwise[1]?.number;
     const payouts = room.result ? Object.entries(room.result.payouts).filter(([,amount]) => amount > 0).map(([id,amount]) => `${room.seats.find(s => s.user_id === id)?.name || '已离桌玩家'} +${count(amount)}`).join(' · ') : '';
-    root.innerHTML = `<div class="poker-room-screen"><header class="poker-toolbar"><button class="pk-btn poker-quiet" data-lobby>${icon('back')}<span>房间大厅</span></button><div class="poker-room-heading"><h2>${esc(room.name)}</h2><small>${practice ? '人机练习' : gifted ? '多人练习' : 'Coins 多人局'} · 第 ${room.hand_number} 手 · 盲注 ${room.big_blind/2} / ${room.big_blind}</small></div><div class="poker-room-tools"><button class="pk-btn poker-quiet poker-sound" data-sound aria-pressed="${soundOn}" title="${soundOn ? '关闭音效' : '开启音效'}">${icon('sound')}<span>音效${soundOn ? '开' : '关'}</span></button><button class="pk-btn poker-quiet" data-fullscreen title="切换全屏">${icon('expand')}<span>全屏</span></button><button class="pk-btn poker-quiet" data-help aria-expanded="false">玩法</button></div></header>${alertMarkup()}
+    root.innerHTML = `<div class="poker-room-screen"><header class="poker-toolbar"><button class="pk-btn poker-quiet" data-lobby>${icon('back')}<span>房间大厅</span></button><div class="poker-room-heading"><h2>${esc(room.name)}</h2><small>${practice ? '人机练习' : '多人联机'} · 第 ${room.hand_number} 手 · 盲注 ${room.big_blind/2} / ${room.big_blind}</small></div><div class="poker-room-tools"><button class="pk-btn poker-quiet poker-sound" data-sound aria-pressed="${soundOn}" title="${soundOn ? '关闭音效' : '开启音效'}">${icon('sound')}<span>音效${soundOn ? '开' : '关'}</span></button><button class="pk-btn poker-quiet" data-fullscreen title="切换全屏">${icon('expand')}<span>全屏</span></button><button class="pk-btn poker-quiet" data-help aria-expanded="false">玩法</button></div></header>${alertMarkup()}
       <div class="poker-table ${room.max_players >= 8 ? 'poker-table-crowded' : ''}" style="--seat-count:${room.max_players}" role="group" aria-label="${room.max_players} 人德州扑克牌桌"><div class="poker-felt"></div><div class="poker-felt-line"></div><div class="poker-deck" aria-label="牌堆"><i></i><i></i><i></i></div><div class="poker-community"><div class="poker-street">${streets[room.street]}</div><div class="poker-board" aria-label="公共牌">${cards(room.board)}${Array.from({length:5-room.board.length},()=>'<span class="poker-card poker-card-slot" aria-hidden="true"></span>').join('')}</div><div class="poker-pot"><span class="poker-pot-chips">${chips(room.pot)}</span><div><small>${room.street === 'finished' ? '本手底池 · 已分配' : '底池'}</small><strong>${count(room.pot)}</strong></div></div><p class="poker-turn" role="status">${playing ? `${esc(actor?.name || '')} 操作中 <strong data-clock></strong>` : room.result ? '本手结束，请准备下一手' : '入座后准备，至少两人开局'}</p></div>
       <div class="poker-bets">${room.seats.map(seat=>`<div class="poker-bet ${seat.bet ? '' : 'poker-bet-empty'}" style="${seatPosition(seat.number,anchor,room.max_players,.56)}" data-bet-seat="${seat.number}">${chips(seat.bet)}<strong>${seat.bet ? count(seat.bet) : ''}</strong></div>`).join('')}</div>
       <div class="poker-seats">${Array.from({length:room.max_players},(_,number)=>{
@@ -327,12 +325,12 @@
         const before=previous?.hand_number===room.hand_number?previous.seats.find(s=>s.user_id===seat.user_id):null;
         const action=before&&seat.stack<before.stack&&seat.bet>before.bet?(before.bet?'加注':'下注'):'';
         return `<article class="poker-seat ${active?'poker-seat-turn':''} ${seat.folded&&playing?'poker-seat-folded':''} ${own?'poker-seat-own':''} ${winner?'poker-seat-winner':''}" style="${position}" data-seat="${number}"><div class="poker-hole">${cards(seat.cards,Math.max(0,seat.card_count-seat.cards.length))}</div><div class="poker-avatar-wrap"><svg class="poker-timer" viewBox="0 0 50 50" aria-hidden="true"><circle cx="25" cy="25" r="22"/><circle class="poker-timer-progress" cx="25" cy="25" r="22"/></svg><span class="poker-avatar ${seat.is_bot?'poker-avatar-bot':''}" aria-hidden="true">${esc(seat.is_bot?'机':Array.from(seat.name)[0]||'玩')}</span>${room.dealer===number?'<b class="poker-dealer" title="庄家">D</b>':''}${number===smallBlind?'<b class="poker-blind" title="小盲注">SB</b>':number===bigBlind?'<b class="poker-blind poker-big-blind" title="大盲注">BB</b>':''}</div><div class="poker-seat-plate"><strong class="poker-seat-name" title="${esc(seat.name)}">${esc(seat.name)}${own?'<span>你</span>':''}</strong><strong class="poker-stack">${count(seat.stack)}</strong></div><span class="poker-seat-status ${action?'poker-seat-action':''}">${winner?`+${count(room.result.payouts[seat.user_id])}`:action||status}</span></article>`;
-      }).join('')}</div><div class="poker-motion-layer" aria-hidden="true"></div><div class="poker-table-caption" aria-hidden="true">${gifted?'练习筹码 · 不影响钱包':'RBC Coins · 无限注'}</div></div>
+      }).join('')}</div><div class="poker-motion-layer" aria-hidden="true"></div><div class="poker-table-caption" aria-hidden="true">练习筹码 · 不影响钱包</div></div>
       <button class="pk-btn poker-fullscreen-exit" data-exit-fullscreen type="button" aria-label="退出全屏">${icon('back')}<span>退出全屏</span></button><button class="pk-btn poker-drawer-toggle" data-drawer-toggle type="button" aria-controls="pokerControls" aria-expanded="${drawerOpen}" aria-label="收起操作台"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button>
-      <section id="pokerControls" class="poker-controls" aria-label="牌局操作"><div class="poker-control-info"><strong>${room.closed?'房间已关闭':actions?'轮到你了':me?.leaving?'已申请离桌':playing?`等待${esc(actor?.name||'其他玩家')}`:me?'准备开始下一手':'选择入座，加入下一手'}</strong><small>${me?`在桌 ${count(me.stack)} ${currency}`:gifted?'免费领取练习筹码':'买入后入座'}${actions?' · 行动剩余 <span data-clock></span>':''}</small></div>
-      <div class="poker-action-buttons">${room.closed?'<p>剩余筹码已按模式结算。</p>':me?actions&&!me.leaving?`<button class="pk-btn poker-fold" data-action="fold">弃牌</button><button class="pk-btn poker-call" data-action="${actions.check?'check':'call'}">${actions.check?'过牌':`跟注 <span class="poker-action-amount">${count(actions.call)}</span>`}</button>${actions.raise?`<div class="poker-raise-control"><button class="pk-btn poker-raise" data-action="raise" type="button" aria-label="加注">加注</button><div class="poker-raise-field"><input id="pokerRaise" data-raise type="number" inputmode="numeric" step="1" min="${minRaise}" max="${actions.max_raise_to}" value="${raiseDraft ?? minRaise}" placeholder="加注" aria-label="本轮加注至总额"><button class="pk-btn poker-raise-toggle" data-raise-toggle type="button" aria-label="选择快捷加注金额" aria-controls="pokerRaisePresets" aria-expanded="${raisePresetsOpen}"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="m6 9 6 6 6-6Z"/></svg></button></div><div id="pokerRaisePresets" class="poker-raise-presets" ${raisePresetsOpen?'':'hidden'}><div class="poker-quick-bets">${[['最小',minRaise],['½ 底池',Math.max(minRaise,(me?.bet||0)+actions.call+Math.round((room.pot+actions.call)/2))],['满池',Math.max(minRaise,(me?.bet||0)+actions.call+room.pot+actions.call)],['最大',actions.max_raise_to]].map(([label,value])=>`<button class="pk-btn poker-quick" data-quick="${Math.min(actions.max_raise_to,value)}">${label}</button>`).join('')}</div></div></div>`:''}${actions.all_in?'<button class="pk-btn poker-allin" data-action="all_in">全下</button>':''}`:!playing&&!me.leaving?me.stack>0?`<button class="pk-btn poker-call" data-action="ready">${me.ready?'取消准备':'准备开局'}</button>`:gifted?'<button class="pk-btn poker-call" data-action="refill">领取练习筹码</button>':'<span>筹码用完，请离桌后重新买入</span>':'':!practice?`<button class="pk-btn poker-call" data-action="join" ${room.seats.length>=room.max_players?'disabled':''}>${room.seats.length>=room.max_players?'房间已满':gifted?'免费入座':`入桌 ${count(room.buy_in)} 筹码`}</button>`:'<p>这是个人练习房间。</p>'}</div>${me&&(!me.leaving||!playing)&&!room.closed?`<button class="pk-btn poker-leave poker-quiet" data-leave>${me.leaving?'重试结算':playing&&me.in_hand?'申请离桌':'离桌'}</button>`:''}</section>
+      <section id="pokerControls" class="poker-controls" aria-label="牌局操作"><div class="poker-control-info"><strong>${room.closed?'房间已关闭':actions?'轮到你了':me?.leaving?'已申请离桌':playing?`等待${esc(actor?.name||'其他玩家')}`:me?'准备开始下一手':'选择入座，加入下一手'}</strong><small>${me?`在桌 ${count(me.stack)} 练习筹码`:'免费领取练习筹码'}${actions?' · 行动剩余 <span data-clock></span>':''}</small></div>
+      <div class="poker-action-buttons">${room.closed?'<p>本桌练习已结束。</p>':me?actions&&!me.leaving?`<button class="pk-btn poker-fold" data-action="fold">弃牌</button><button class="pk-btn poker-call" data-action="${actions.check?'check':'call'}">${actions.check?'过牌':`跟注 <span class="poker-action-amount">${count(actions.call)}</span>`}</button>${actions.raise?`<div class="poker-raise-control"><button class="pk-btn poker-raise" data-action="raise" type="button" aria-label="加注">加注</button><div class="poker-raise-field"><input id="pokerRaise" data-raise type="number" inputmode="numeric" step="1" min="${minRaise}" max="${actions.max_raise_to}" value="${raiseDraft ?? minRaise}" placeholder="加注" aria-label="本轮加注至总额"><button class="pk-btn poker-raise-toggle" data-raise-toggle type="button" aria-label="选择快捷加注金额" aria-controls="pokerRaisePresets" aria-expanded="${raisePresetsOpen}"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="m6 9 6 6 6-6Z"/></svg></button></div><div id="pokerRaisePresets" class="poker-raise-presets" ${raisePresetsOpen?'':'hidden'}><div class="poker-quick-bets">${[['最小',minRaise],['½ 底池',Math.max(minRaise,(me?.bet||0)+actions.call+Math.round((room.pot+actions.call)/2))],['满池',Math.max(minRaise,(me?.bet||0)+actions.call+room.pot+actions.call)],['最大',actions.max_raise_to]].map(([label,value])=>`<button class="pk-btn poker-quick" data-quick="${Math.min(actions.max_raise_to,value)}">${label}</button>`).join('')}</div></div></div>`:''}${actions.all_in?'<button class="pk-btn poker-allin" data-action="all_in">全下</button>':''}`:!playing&&!me.leaving?me.stack>0?`<button class="pk-btn poker-call" data-action="ready">${me.ready?'取消准备':'准备开局'}</button>`:'<button class="pk-btn poker-call" data-action="refill">领取练习筹码</button>':'':!practice?`<button class="pk-btn poker-call" data-action="join" ${room.seats.length>=room.max_players?'disabled':''}>${room.seats.length>=room.max_players?'房间已满':'免费入座'}</button>`:'<p>这是个人练习房间。</p>'}</div>${me&&(!me.leaving||!playing)&&!room.closed?`<button class="pk-btn poker-leave poker-quiet" data-leave>${me.leaving?'重试结算':playing&&me.in_hand?'申请离桌':'离桌'}</button>`:''}</section>
       ${room.result?`<div class="poker-result" role="status"><div><strong>本手结算</strong><span>${esc(payouts)}</span></div><small>${room.result.showdown?Object.entries(room.result.hands).map(([id,hand])=>esc((room.seats.find(s=>s.user_id===id)?.name||'已离桌玩家')+'：'+hand)).join(' · '):'其余玩家弃牌'}</small></div>`:''}
-      <details class="poker-history"><summary>本手行动记录 <span>${room.log.length} 条</span></summary><ol>${room.log.map(line=>`<li>${esc(line)}</li>`).join('')||'<li>等待开局</li>'}</ol></details><div class="poker-room-help" hidden><p>两张底牌搭配五张公共牌，选出最好的五张牌。依次进行翻牌前、翻牌、转牌、河牌下注；其他玩家全部弃牌也可获胜。</p>${handRankHelp}<p>每次行动 45 秒。超时自动过牌或弃牌；断线 5 分钟自动申请离桌。全下后离桌仍参与本手比牌，结束后结算。</p><p>${gifted?'赠送筹码不计入钱包、收入或排行榜。':'离桌返还剩余筹码，可在大厅按 1000:1 提现。'} 钱包余额 ${count(balance)} RBC Coins。</p></div></div>`;
+      <details class="poker-history"><summary>本手行动记录 <span>${room.log.length} 条</span></summary><ol>${room.log.map(line=>`<li>${esc(line)}</li>`).join('')||'<li>等待开局</li>'}</ol></details><div class="poker-room-help" hidden><p>两张底牌搭配五张公共牌，选出最好的五张牌。依次进行翻牌前、翻牌、转牌、河牌下注；其他玩家全部弃牌也可获胜。</p>${handRankHelp}<p>每次行动 45 秒。超时自动过牌或弃牌；断线 5 分钟自动申请离桌。全下后离桌仍参与本手比牌，结束后结算。</p><p>练习筹码只在本桌使用，不计入钱包、收入或排行榜。</p></div></div>`;
     root.querySelector('[data-lobby]').onclick=()=>{ exitGameFullscreen(); stopVisuals(); roomId=null; state=null; presentedRoom=null; notice=''; refresh(true); };
     root.querySelector('[data-sound]').onclick=async event=>{
       const button=event.currentTarget;
@@ -426,22 +424,16 @@
   }
   function leaveDialog() {
     if (state.room.mode === 'practice') { run('leave'); return; }
-    const gifted = state.room.mode !== 'coins';
-    const element = dialog(`<h2>${gifted ? '离开练习桌' : '结算离桌'}</h2><div class="poker-dialog-note"><strong>${gifted ? '练习筹码仅限本桌使用' : '剩余筹码将返还余额'}</strong><p>${gifted ? '退出后作废，不进入可兑换筹码余额，也不计入 Coin 钱包或收入。' : '离桌后可在大厅按 1,000 筹码 = 1 Coin 提现。'}</p></div><p>若你正在本手中，将在本手结束后离桌；全下仍参加比牌。</p><div class="extension-actions"><button class="secondary-button" data-cancel>继续留桌</button><button class="primary-button" data-confirm>确认离桌</button></div>`, '确认本桌筹码的结算方式。');
+    const element = dialog(`<h2>离开牌桌</h2><div class="poker-dialog-note"><strong>练习筹码仅限本桌使用</strong><p>退出后作废，不计入钱包或收入。</p></div><p>若你正在本手中，将在本手结束后离桌；全下仍参加比牌。</p><div class="extension-actions"><button class="secondary-button" data-cancel>继续留桌</button><button class="primary-button" data-confirm>确认离桌</button></div>`, '确认本桌筹码的结算方式。');
     element.querySelector('[data-confirm]').onclick = () => { element.close(); run('leave'); };
   }
   function createDialog(mode) {
-    const practice = mode === 'practice', gifted = mode !== 'coins';
+    const practice = mode === 'practice';
     const capacity = '<label>房间人数<select name="max_players"><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option><option>7</option><option>8</option><option>9</option></select></label>';
     const bots = '<label>机器人数量<select name="bot_count"><option value="1">1 个</option><option value="2">2 个</option><option value="3" selected>3 个</option><option value="4">4 个</option><option value="5">5 个</option></select></label>';
-    const giftNotice = '<div class="poker-dialog-note"><strong>每人赠送 1,000 练习筹码</strong><p>盲注 5 / 10，筹码用完可重新领取。仅限本桌使用，退出即作废，不进入可兑换筹码余额或 Coin 钱包。</p></div>';
-    const coinFields = '<label>盲注（小盲 / 大盲）<select name="big_blind"><option value="2">1 / 2</option><option value="4">2 / 4</option><option value="10">5 / 10</option><option value="20">10 / 20</option><option value="50">25 / 50</option><option value="100">50 / 100</option></select></label><label>底注（筹码）<input name="buy_in" type="number" min="2" max="100000" step="1" value="1000" required><small>每人入桌扣除的筹码，默认 1000，最低为大盲注；请先在大厅买入筹码。</small></label>';
-    const element = dialog(`<form class="extension-form"><h2>${practice ? '创建人机练习' : gifted ? '创建多人练习' : '创建多人联机房间'}</h2><label>房间名称<input name="name" maxlength="40" required value="${practice ? '我的练习桌' : ''}" placeholder="给牌桌起个名字"></label><div class="poker-dialog-fields">${practice ? bots : capacity}${gifted ? '' : coinFields}</div>${gifted ? giftNotice : ''}<p role="alert"></p><div class="extension-actions"><button class="secondary-button" type="button" data-cancel>取消</button><button class="primary-button" type="submit">${gifted ? '免费领取筹码并创建' : '确认入桌并创建'}</button></div></form>`, practice ? '与机器人同桌，轻松熟悉牌局。' : gifted ? '邀请队友练习，使用独立的赠送筹码。' : '设置牌桌规则，邀请队友入座。');
+    const giftNotice = '<div class="poker-dialog-note"><strong>每人赠送 1,000 练习筹码</strong><p>盲注 5 / 10，筹码用完可重新领取。仅限本桌使用，退出即作废。</p></div>';
+    const element = dialog(`<form class="extension-form"><h2>${practice ? '创建人机练习' : '创建多人联机'}</h2><label>房间名称<input name="name" maxlength="40" required value="${practice ? '我的练习桌' : ''}" placeholder="给牌桌起个名字"></label><div class="poker-dialog-fields">${practice ? bots : capacity}</div>${giftNotice}<p role="alert"></p><div class="extension-actions"><button class="secondary-button" type="button" data-cancel>取消</button><button class="primary-button" type="submit">免费领取筹码并创建</button></div></form>`, practice ? '与机器人同桌，轻松熟悉牌局。' : '邀请队友同桌，使用赠送的练习筹码。');
     const form = element.querySelector('form');
-    form.elements.big_blind?.addEventListener('change', () => {
-      const blind = Number(form.elements.big_blind.value);
-      form.elements.buy_in.min = blind;
-    });
     let submitting = false;
     element.addEventListener('cancel', event => { if (submitting) event.preventDefault(); });
     form.onsubmit = async event => {
@@ -449,42 +441,13 @@
       submitting = true; const token = generation;
       dialogBusy(element, true);
       const data = {name:form.elements.name.value, mode};
-      for (const key of ['bot_count','max_players','big_blind','buy_in']) if (form.elements[key]) data[key] = Number(form.elements[key].value);
+      for (const key of ['bot_count','max_players']) if (form.elements[key]) data[key] = Number(form.elements[key].value);
       try {
         const payload = await api('', data); element.close();
         if (token !== generation || !enabled) return;
         roomId = payload.room.id; apply(payload); notice = ''; drawRoom();
       } catch (error) { form.querySelector('[role=alert]').textContent = error.message; }
       finally { submitting = false; dialogBusy(element, false); }
-    };
-  }
-  function exchangeDialog(action) {
-    if (!lobby || document.querySelector('.poker-dialog[open]')) return;
-    const buying = action === 'buy';
-    const max = buying ? Math.max(0, lobby.balance) : Math.floor((lobby.chips || 0) / 1000);
-    const element = dialog(`<form class="extension-form"><h2>${buying ? '买入筹码' : '筹码提现'}</h2><dl class="poker-dialog-balances"><div><dt>Coin 钱包</dt><dd>${count(lobby.balance)} <small>Coins</small></dd></div><div><dt>可用筹码</dt><dd>${count(lobby.chips)} <small>筹码</small></dd></div></dl><label>${buying ? '买入金额' : '提现金额'}（Coins）<input name="coins" type="number" inputmode="numeric" min="1" max="${max}" step="1" value="1" required><small>本次最多${buying ? '买入' : '提现'} ${count(max)} Coins</small></label><output class="poker-exchange-preview" data-preview aria-live="polite"></output><p class="poker-dialog-hint">每满 1,000 筹码可提现 1 Coin，余数保留。桌上筹码需先离桌；练习筹码不可兑换。</p><p role="alert"></p><div class="extension-actions"><button class="secondary-button" type="button" data-cancel>取消</button><button class="primary-button" type="submit" ${max < 1 ? 'disabled' : ''}>确认${buying ? '买入' : '提现'}</button></div></form>`, '1 Coin = 1,000 筹码');
-    const form = element.querySelector('form');
-    const preview = () => {
-      const coins = Number(form.elements.coins.value), valid = Number.isSafeInteger(coins) && coins > 0 && coins <= max;
-      form.querySelector('[data-preview]').innerHTML = valid ? `<span>${buying ? '将获得' : '将扣除'}</span><strong>${count(coins * 1000)} <small>筹码</small></strong>` : '<span>请输入可兑换范围内的整数金额</span>';
-    };
-    form.elements.coins.addEventListener('input', preview); preview();
-    let submitting = false;
-    element.addEventListener('cancel', event => { if (submitting) event.preventDefault(); });
-    form.onsubmit = async event => {
-      event.preventDefault(); if (submitting) return;
-      submitting = true; const token = generation;
-      dialogBusy(element, true);
-      try {
-        const payload = await api('/chips', {action, coins:Number(form.elements.coins.value)});
-        element.close();
-        window.CurrencyModule?.syncBalance(payload.balance);
-        if (token !== generation || !enabled) return;
-        generation++; // Discard any poll started before the exchange completed.
-        Object.assign(lobby, payload);
-        notice = buying ? '筹码买入成功' : '提现成功，不足 1000 的筹码已保留'; drawLobby();
-      } catch (error) { form.querySelector('[role=alert]').textContent = error.message; }
-      finally { submitting = false; dialogBusy(element, false); form.querySelector('[type=submit]').disabled = max < 1; }
     };
   }
   async function enter(id) {
@@ -498,7 +461,7 @@
       if (id) {
         const payload = await api('/' + id);
         if (token !== generation || !enabled) return;
-        const changed = force || !state || state.room.version !== payload.room.version || state.balance !== payload.balance || state.chips !== payload.chips;
+        const changed = force || !state || state.room.version !== payload.room.version;
         apply(payload);
         if (changed) drawRoom(); else updateClock();
       } else {
@@ -515,7 +478,7 @@
       const alert = root.querySelector('.poker-notice');
       if (alert) alert.textContent = notice;
       else {
-        root.innerHTML = heading('连接牌桌', 0) + alertMarkup() + '<button class="secondary-button" data-retry>重试</button>';
+        root.innerHTML = heading('连接牌桌') + alertMarkup() + '<button class="secondary-button" data-retry>重试</button>';
         root.querySelector('[data-retry]').onclick = () => refresh(true);
       }
     } finally { loading = false; }
@@ -545,8 +508,6 @@
   }
   root.addEventListener('click', event => {
     if (event.target.closest('[data-extensions]')) close();
-    const exchange = event.target.closest('[data-exchange]');
-    if (exchange && !exchange.disabled) exchangeDialog(exchange.dataset.exchange);
   });
   document.addEventListener('click', event => { if (raisePresetsOpen && !event.target.closest('.poker-raise-control')) setRaisePresets(false); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) stopVisuals(); });

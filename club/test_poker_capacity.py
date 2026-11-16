@@ -13,14 +13,14 @@ class CapacityFixtures(PokerFixtures):
             user = User.objects.create_user(f'capacity-player-{index}')
             member = TeamMembership.objects.create(user=user, team=self.other, display_name=f'Capacity {index}')
             room = PokerRoom.objects.create(team=self.other, created_by=user, name=f'Other {index}',
-                                           mode=('coins', 'friendly', 'practice')[index % 3])
+                                           mode=('friendly', 'practice')[index % 2])
             PokerSeat.objects.create(room=room, user=user, member=member, number=0, stack=1000)
 
 
 class PokerCapacityTests(CapacityFixtures, TestCase):
     def test_all_modes_share_global_limit_and_failed_creation_leaves_no_room_or_charge(self):
         self.fill(10)
-        for mode in ('coins', 'friendly', 'practice'):
+        for mode in ('friendly', 'practice'):
             response = self.post(self.client, '/api/poker/rooms', {'name':'Full', 'mode':mode})
             self.assertEqual(response.status_code, 400)
             self.assertIn('10 人上限', response.json()['error'])
@@ -70,7 +70,7 @@ class PokerCapacityConcurrencyTests(CapacityFixtures, TransactionTestCase):
 
     def test_two_different_rooms_compete_for_last_global_slot(self):
         first = self.create()
-        response = self.post(self.clients[3], '/api/poker/rooms', {'name':'Second', 'buy_in':100})
+        response = self.post(self.clients[3], '/api/poker/rooms', {'name':'Second', 'mode':'friendly'})
         self.assertEqual(response.status_code, 200)
         second = response.json()['room']
         self.fill(7)

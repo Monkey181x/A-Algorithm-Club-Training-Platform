@@ -1,4 +1,4 @@
-"""Room and escrow persistence. Every state change holds the room row lock."""
+"""Practice room persistence. Every state change holds the room row lock."""
 from datetime import timedelta
 import secrets
 
@@ -6,56 +6,16 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from . import poker_engine as engine
-from .models import CurrencyBalance, CurrencyTransaction, PokerChipBalance, PokerRoom, PokerSeat
-from .currency_services import deduct_currency, get_or_create_balance
+from .models import PokerRoom, PokerSeat
 
 
 GLOBAL_PLAYER_LIMIT = 10
 ADMISSION_LOCK_KEY = 749184215
-CHIPS_PER_COIN = 1000
-MAX_CHIPS = 9_000_000_000_000_000
-
-
-def chip_balance(user_id):
-    return PokerChipBalance.objects.filter(user_id=user_id).values_list('balance', flat=True).first() or 0
-
-
-def locked_chips(user_id):
-    account, _ = PokerChipBalance.objects.get_or_create(user_id=user_id)
-    return PokerChipBalance.objects.select_for_update().get(pk=account.pk)
-
-
-@transaction.atomic
-def exchange_chips(member, action, coins):
-    if action not in ('buy', 'withdraw') or type(coins) is not int or not 1 <= coins <= 2147483647:
-        raise ValueError('兑换数量必须为正整数 Coins')
-    if action == 'buy' and not member.team.currency_enabled:
-        raise ValueError('当前团队未启用 RBC Coins')
-    account = locked_chips(member.user_id)
-    chips = coins * CHIPS_PER_COIN
-    if action == 'buy':
-        if account.balance + chips > MAX_CHIPS:
-            raise ValueError('筹码余额超出上限')
-        deduct_currency(member, coins, 'poker_buyin', f'德州扑克买入 {chips} 筹码')
-        account.balance += chips
-    else:
-        if account.balance < chips:
-            raise ValueError('筹码不足，每满 1000 筹码可提现 1 Coin；请先离桌取回桌上筹码')
-        wallet = get_or_create_balance(member)
-        wallet = CurrencyBalance.objects.select_for_update().get(pk=wallet.pk)
-        if wallet.balance + coins > 2147483647:
-            raise ValueError('Coin 钱包余额超出上限')
-        account.balance -= chips
-        wallet.balance += coins
-        wallet.save(update_fields=['balance', 'updated_at'])
-        CurrencyTransaction.objects.create(user_id=member.user_id, member=member, team=member.team,
-            amount=coins, balance_after=wallet.balance, transaction_type='poker_cashout',
-            description=f'德州扑克提现 {chips} 筹码')
-    account.save(update_fields=['balance'])
+PRACTICE_MODES = ('friendly', 'practice')
 
 
 def capacity():
-    # Leaving players keep their place until the hand/escrow is actually settled.
+    # Leaving players keep their place until the hand is actually settled.
     players = PokerSeat.objects.filter(room__closed=False, user__isnull=False).count()
     return {'players': players, 'limit': GLOBAL_PLAYER_LIMIT,
             'available': max(0, GLOBAL_PLAYER_LIMIT - players)}
@@ -63,7 +23,7 @@ def capacity():
 
 def reserve_player_slot():
     # Serialize admission across teams, rooms and web processes. The transaction
-    # lock is held through seat insertion (and any buy-in), not just the count.
+    # lock is held through seat insertion, not just the count.
     if connection.vendor == 'postgresql':
         with connection.cursor() as cursor:
             cursor.execute('SELECT pg_advisory_xact_lock(%s)', [ADMISSION_LOCK_KEY])
@@ -80,18 +40,6 @@ def participant(room, seat):
     return player if player and player['seat_id'] == seat.pk else None
 
 
-def cashout(seat):
-    """Return table chips once, atomically with removal of the seat."""
-    if seat.stack and seat.room.mode == 'coins' and seat.user_id:
-        wallet = locked_chips(seat.user_id)
-        if wallet.balance + seat.stack > MAX_CHIPS:
-            return False  # Keep the escrow until the account has wallet capacity again.
-        wallet.balance += seat.stack
-        wallet.save(update_fields=['balance'])
-    seat.delete()
-    return True
-
-
 def persist(room):
     for seat in room.seats.select_related('member', 'room').order_by('user_id'):
         player = participant(room, seat)
@@ -103,7 +51,7 @@ def persist(room):
                 seat.stack = room.buy_in
         seat.save(update_fields=['stack', 'ready'])
         if seat.leaving and (not active(room) or not player):
-            cashout(seat)
+            seat.delete()
     room.version += 1
     if not room.seats.filter(user__isnull=False).exists():
         room.seats.filter(user__isnull=True).delete()
@@ -172,7 +120,7 @@ def tick(room, now=None):
 
 @transaction.atomic
 def sweep_room(room_id):
-    room = PokerRoom.objects.select_for_update().filter(pk=room_id, closed=False).first()
+    room = PokerRoom.objects.select_for_update().filter(pk=room_id, closed=False, mode__in=PRACTICE_MODES).first()
     if room:
         tick(room)
 
@@ -205,11 +153,9 @@ def create_room(member, data):
     # Team lock makes the room count limit safe across simultaneous creators.
     from .models import Team
     team = Team.objects.select_for_update().get(pk=member.team_id)
-    mode = data.get('mode', 'coins')
-    if mode not in ('coins', 'practice', 'friendly'):
+    mode = data.get('mode')
+    if mode not in PRACTICE_MODES:
         raise ValueError('请选择有效的游戏模式')
-    if mode == 'coins' and not team.currency_enabled:
-        raise ValueError('当前团队未启用 RBC Coins')
     if PokerSeat.objects.filter(user_id=member.user_id).exists():
         raise ValueError('请先离开当前牌桌')
     if PokerRoom.objects.filter(team=team, closed=False).count() >= 20:
@@ -217,9 +163,7 @@ def create_room(member, data):
     name = data.get('name', '')
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40:
         raise ValueError('房间名称应为 1–40 个字符')
-    capacity, blind, buy_in = data.get('max_players', 6), data.get('big_blind', 2), data.get('buy_in', 1000)
-    if mode == 'friendly':
-        blind, buy_in = 10, 1000
+    capacity, blind, buy_in = data.get('max_players', 6), 10, 1000
     if mode == 'practice':
         bot_count = data.get('bot_count', 3)
         if type(bot_count) is not int or not 1 <= bot_count <= 5:
@@ -227,10 +171,6 @@ def create_room(member, data):
         capacity, blind, buy_in = bot_count + 1, 10, 1000
     if type(capacity) is not int or not 2 <= capacity <= 9:
         raise ValueError('房间人数应为 2–9 人')
-    if type(blind) is not int or blind not in (2, 4, 10, 20, 50, 100):
-        raise ValueError('请选择有效的盲注级别')
-    if type(buy_in) is not int or not blind <= buy_in <= 100000:
-        raise ValueError('底注应不低于大盲注，上限 100000 筹码')
     room = PokerRoom.objects.create(team=team, created_by_id=member.user_id, name=name.strip(), mode=mode,
                                     max_players=capacity, big_blind=blind, buy_in=buy_in)
     join_room(room, member)
@@ -244,8 +184,6 @@ def create_room(member, data):
 def join_room(room, member):
     if room.closed:
         raise ValueError('房间已关闭')
-    if room.mode == 'coins' and not member.team.currency_enabled:
-        raise ValueError('当前团队未启用 RBC Coins')
     existing = PokerSeat.objects.filter(user_id=member.user_id).first()
     if existing:
         if existing.room_id == room.pk:
@@ -257,12 +195,6 @@ def join_room(room, member):
     if len(occupied) >= room.max_players:
         raise ValueError('房间已满')
     reserve_player_slot()
-    if room.mode == 'coins':
-        account = locked_chips(member.user_id)
-        if account.balance < room.buy_in:
-            raise ValueError('剩余筹码不足，请先在大厅买入筹码')
-        account.balance -= room.buy_in
-        account.save(update_fields=['balance'])
     PokerSeat.objects.create(room=room, user_id=member.user_id, member=member,
                              number=next(n for n in range(room.max_players) if n not in occupied), stack=room.buy_in)
     room.version += 1
@@ -291,8 +223,7 @@ def operate(room, member, data):
                 fold_leaver(room, seat, timezone.now())
             persist(room)
         else:
-            if not cashout(seat):
-                raise ValueError('筹码余额接近上限，请先提现再结算离桌')
+            seat.delete()
             persist(room)
         return
     if seat.leaving:
@@ -303,9 +234,7 @@ def operate(room, member, data):
         if type(data.get('ready')) is not bool or type(data.get('hand_number')) is not int or data['hand_number'] != room.hand_number:
             raise ValueError('请刷新当前手牌后重新准备')
         if seat.stack <= 0:
-            raise ValueError('筹码不足，请离桌后重新买入')
-        if room.mode == 'coins' and not member.team.currency_enabled:
-            raise ValueError('当前团队未启用 RBC Coins，请结算离桌')
+            raise ValueError('筹码不足，请先领取练习筹码')
         seat.ready = data['ready']
         seat.save(update_fields=['ready'])
         seats = list(room.seats.select_related('member').filter(stack__gt=0, leaving=False).order_by('number'))
@@ -322,7 +251,7 @@ def operate(room, member, data):
     if data.get('version') != room.version or type(data.get('version')) is not int:
         raise ValueError('牌局已更新，请查看最新牌桌后操作')
     if action == 'refill':
-        if room.mode not in ('practice', 'friendly') or active(room) or seat.stack > 0:
+        if room.mode not in PRACTICE_MODES or active(room) or seat.stack > 0:
             raise ValueError('仅练习局筹码用完后可重新领取')
         seat.stack = room.buy_in
         seat.save(update_fields=['stack'])

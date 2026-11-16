@@ -41,7 +41,7 @@ class AccountProblemMigrationTests(TransactionTestCase):
         return executor.loader.project_state(targets).apps
 
     def tearDown(self):
-        self.migrate(self.merged)
+        self.migrate(MigrationExecutor(connection).loader.graph.leaf_nodes('club'))
         super().tearDown()
 
     def seed(self, apps, global_wallet=False):
