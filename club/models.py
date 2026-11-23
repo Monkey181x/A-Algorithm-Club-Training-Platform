@@ -1002,3 +1002,35 @@ class PokerSeat(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['room', 'number'], name='unique_poker_room_seat')]
+
+
+class DataStructureCollection(models.Model):
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="data_structure_collections")
+    name = models.CharField(max_length=100)
+    requirements = models.TextField(blank=True)
+    languages = models.JSONField()
+    is_open = models.BooleanField(default=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    position = models.PositiveBigIntegerField(default=0)
+    version = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ["position", "-id"]
+
+
+class DataStructureImplementation(models.Model):
+    collection = models.ForeignKey(DataStructureCollection, on_delete=models.CASCADE, related_name="implementations")
+    member = models.ForeignKey(TeamMembership, on_delete=models.SET_NULL, null=True)
+    language = models.CharField(max_length=16)
+    code = models.TextField()
+    notes = models.TextField(blank=True)
+    blog = models.TextField(null=True, blank=True)
+    is_rejected = models.BooleanField(default=False)
+    rejection_note = models.TextField(blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["collection", "member", "language"], name="unique_structure_member_language"),
+        ]

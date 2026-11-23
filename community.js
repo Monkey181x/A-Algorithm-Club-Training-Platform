@@ -385,6 +385,16 @@ function parseBlogMarkdown(source) {
   return parser.parse(source);
 }
 
+function decorateSubmissionCode(code, language) {
+  window.CodeColors?.colorElement(code, language);
+  const pre=code.parentElement,wrap=document.createElement('div');wrap.className='code-block-shell';pre.before(wrap);wrap.append(pre);
+  const button=document.createElement('button');button.type='button';button.className='code-copy-button';
+  const copyIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg>';
+  const status=(label,icon=copyIcon)=>{button.innerHTML=icon;button.setAttribute('aria-label',label);button.title=label;};status('复制代码');
+  button.onclick=async()=>{try{const text=code.textContent;if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const input=document.createElement('textarea');input.value=text;input.style.position='fixed';input.style.opacity='0';wrap.append(input);input.select();const copied=document.execCommand('copy');input.remove();if(!copied)throw Error('copy');}status('已复制','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>');setTimeout(()=>status('复制代码'),1500);}catch{status('复制失败，请重试');}};
+  wrap.append(button);
+}
+
 // Viewing uses the editor's stored Markdown; only the rendered output is filtered.
 function renderSubmissionBlog(element, markdown) {
   const source = String(markdown || '');
@@ -421,14 +431,8 @@ function renderSubmissionBlog(element, markdown) {
       }
     });
     element.replaceChildren(template.content);
-    element.querySelectorAll('pre code').forEach(code=>{
-      window.CodeColors?.colorElement(code,code.className.replace('language-','')||'text');
-      const pre=code.parentElement,wrap=document.createElement('div');wrap.className='code-block-shell';pre.before(wrap);wrap.append(pre);
-      const button=document.createElement('button');button.type='button';button.className='code-copy-button';
-      const copyIcon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg>';
-      const status=(label,icon=copyIcon)=>{button.innerHTML=icon;button.setAttribute('aria-label',label);button.title=label;};status('复制代码');
-      button.onclick=async()=>{try{const text=code.textContent;if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const input=document.createElement('textarea');input.value=text;input.style.position='fixed';input.style.opacity='0';wrap.append(input);input.select();const copied=document.execCommand('copy');input.remove();if(!copied)throw Error('copy');}status('已复制','<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>');setTimeout(()=>status('复制代码'),1500);}catch{status('复制失败，请重试');}};
-      wrap.append(button);
+    element.querySelectorAll('pre code').forEach(code => {
+      decorateSubmissionCode(code, code.className.replace('language-', '') || 'text');
     });
     if (typeof renderMathInElement !== 'undefined') {
       renderMathInElement(element, {delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false,trust:false});

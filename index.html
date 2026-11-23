@@ -17,7 +17,7 @@
     <link rel="stylesheet" href="tracker.css" />
     <link rel="stylesheet" href="extensions.css?v=categories-3" />
     <link rel="stylesheet" href="/static/vendor/daisyui/poker-components.css?v=dialogs-20261104" /><link rel="stylesheet" href="poker.css?v=free-poker-20261116" />
-    <link rel="stylesheet" href="static/blog-editor.css" />
+    <link rel="stylesheet" href="static/blog-editor.css?v=data-structure-blog" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
     <!-- 新增: UI美化样式 -->
     <link rel="stylesheet" href="styles/liquid-glass.css?v=ranking-20261101" />
@@ -35,6 +35,7 @@
   <link rel="stylesheet" href="/static/account-management.css?v=20261102g" />
     <link rel="stylesheet" href="static/cosmetic-studio.css?v=universal-review2-20261105">
     <link rel="stylesheet" href="static/shop-titles.css?v=universal-20261105d">
+      <link rel="stylesheet" href="/static/data-structures.css?v=implementation-scope">
   </head>
   <body>
     <div class="app-shell">
@@ -66,6 +67,7 @@
           <button class="nav-item active" data-view="dashboard" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></span>总览</button>
           <button class="nav-item" data-view="submissions" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6M8 15l2.5 2.5L16 12"/></svg></span>我的提交</button>
           <button class="nav-item" data-view="showcase" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M10 9v12m4-8h3m-3 4h3"/></svg></span>团队提交</button>
+          <button class="nav-item" data-view="dataStructures" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="9" y="3" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-4h14v4"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/></svg></span>数据结构</button>
           <button class="nav-item" data-view="leaderboard" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M8 3h8v6a4 4 0 0 1-8 0ZM8 5H5v3a3 3 0 0 0 3 3m8-6h3v3a3 3 0 0 1-3 3M12 13v5m-4 3v-3h8v3M6 21h12"/></svg></span>排行榜</button>
           <button class="nav-item" data-view="contests" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 11h18M7 15h2m4 0h4m-10 3h2"/></svg></span>赛事中心</button>
           <button class="nav-item" data-view="members" type="button"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><circle cx="9" cy="7" r="3"/><path d="M3 21v-2a6 6 0 0 1 12 0v2m1-17a3 3 0 0 1 0 6m2 5a5 5 0 0 1 3 4v2"/></svg></span>成员列表</button>
@@ -226,6 +228,10 @@
         </div>
 
         <div class="page-view" id="submissionsView"><div class="page-heading"><div><p class="kicker">MY SUBMISSIONS</p><h1>我的提交</h1></div><button class="primary-button" id="openSubmissionSecondary" type="button"><span>＋</span>提交今日记录</button></div><div class="panel empty-state"><div class="empty-icon">□</div><h2>这里会留下你的训练轨迹</h2><p>本周已有 3 次有效提交，继续保持。</p><button class="secondary-button" id="emptyAction" type="button">提交今日记录</button></div></div>
+        <div class="page-view" id="dataStructuresView">
+          <div class="page-heading"><h1 tabindex="-1">数据结构</h1></div>
+          <div id="dataStructureContent"></div>
+        </div>
         <div class="page-view" id="leaderboardView"><div class="page-heading"><div><p class="kicker">TEAM RANKING</p><h1>排行榜</h1></div></div><div class="panel full-leaderboard"><div class="ranking-toolbar"><div class="segmented segmented--ranking large" role="tablist" aria-label="排行榜分类"><button class="segment active" data-ranking="checkin" type="button">签到榜</button><button class="segment" data-ranking="rating" type="button">Rating榜</button><button class="segment" data-ranking="solved" type="button">过题榜</button><button class="segment" data-ranking="wealth" type="button">财富榜</button></div><label class="ranking-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input type="search" data-ranking-search aria-label="搜索成员或分队" placeholder="搜索名字或分队"><button type="button" data-ranking-search-clear hidden aria-label="清空排行榜搜索">×</button></label></div><label class="rating-platform-filter solved-period-filter" hidden>过题范围<select class="select select-sm" data-solved-period aria-label="过题榜范围"><option value="semester">学期榜</option><option value="all">总榜</option></select></label><label class="rating-platform-filter" hidden>竞赛平台<select data-rating-platform aria-label="Rating榜竞赛平台"><option value="codeforces">Codeforces</option><option value="atcoder">AtCoder</option><option value="nowcoder">牛客</option><option value="luogu">洛谷</option><option value="leetcode_cn">LeetCode 中国站</option><option value="leetcode_us">LeetCode 国际站</option></select></label><div class="leaderboard-list" id="leaderboardListFull"></div></div></div>
         <div class="page-view" id="adminView"><div class="queue-empty">正在加载管理工作台…</div></div>
 
@@ -240,7 +246,7 @@
 <div id="submissionEditorView" class="submission-dialog-host"><div class="modal-backdrop" id="submissionModal" aria-hidden="true"><section class="modal submission-editor-content" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-header submission-editor-heading"><div><p class="section-label">NEW SUBMISSION</p><h2 id="modalTitle" tabindex="-1">提交记录</h2></div><button class="secondary-button submission-editor-close" id="closeSubmission" type="button" aria-label="关闭提交弹窗"><svg class="ui-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button></div><form id="submissionForm"><div class="form-note"><span>第 06 周</span><span>截止 周日 24:00</span></div><section class="panel submission-editor-card editor-problem"><h2>题目信息</h2><label class="field-label">题目链接 <span>必填</span><input id="problemUrl" name="problem_url" type="url" maxlength="1000" required placeholder="https://题目网址" /></label><div class="daily-challenge-links" aria-label="每日练习快捷入口">
 <a class="daily-challenge-link platform-leetcode" id="dailyLeetcode" role="link" aria-disabled="true" target="_blank" rel="noopener noreferrer" aria-label="力扣每日一题（新窗口打开）"><img src="/static/platforms/leetcode.ico" alt="" width="22" height="22" /><span>力扣</span><small>每日一题</small></a>
 <a class="daily-challenge-link platform-nowcoder" href="https://www.nowcoder.com/problem/tracker#/daily" target="_blank" rel="noopener noreferrer" aria-label="牛客每日一题（新窗口打开）"><img src="/static/platforms/nowcoder.ico" alt="" width="22" height="22" /><span>牛客</span><small>每日一题</small></a>
-</div><p class="daily-challenge-status" id="dailyChallengeStatus" role="status"></p></section><section class="panel submission-editor-card editor-proof"><h2>通过截图</h2><label class="field-label"><span>必填 · 1 分</span><div class="upload-box"><input id="proofImage" aria-label="通过截图" name="proof" type="file" accept="image/png,image/jpeg,image/webp" required aria-describedby="proofHint" /><span class="upload-icon">↑</span><strong>点击上传或粘贴截图</strong><small id="proofHint">支持 PNG、JPG、WebP，单张不超过 5MB</small></div></label></section><section class="panel submission-editor-card editor-logic"><h2>题解思路</h2><label class="field-label"><span>可选 · 1 分</span><textarea id="logicText" aria-label="题解思路" name="logic" rows="4" placeholder="写下你的思路、关键算法或复杂度分析"></textarea></label></section><section class="panel submission-editor-card editor-blog"><div class="submission-material-tabs" role="tablist" aria-label="提交内容类型"><button type="button" id="submissionCodeTab" role="tab" aria-selected="true" aria-controls="submissionCodePane" data-submission-material="code">代码 <small class="material-requirement">必填</small></button><button type="button" id="submissionBlogTab" role="tab" aria-selected="false" aria-controls="submissionBlogPane" data-submission-material="blog">Blog <small class="material-requirement">可选</small></button></div><div id="submissionCodePane" class="submission-code-pane" role="tabpanel" aria-labelledby="submissionCodeTab"><label class="code-language-label">代码<select id="submissionCodeLanguage" name="code_language" aria-label="代码语言"><option value="text">纯文本</option><option value="cpp">C++</option><option value="c">C</option><option value="python">Python</option><option value="java">Java</option><option value="javascript">JavaScript</option><option value="typescript">TypeScript</option><option value="go">Go</option><option value="rust">Rust</option><option value="csharp">C#</option><option value="kotlin">Kotlin</option><option value="swift">Swift</option><option value="sql">SQL</option><option value="bash">Shell</option></select></label><div class="submission-code-editor"><pre id="submissionCodeHighlight" aria-hidden="true"><code></code></pre><textarea id="submissionCodeInput" name="code" maxlength="200000" aria-label="题目代码" placeholder="在此填写解题代码" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea></div></div><div id="submissionBlogPane" class="submission-blog-pane" role="tabpanel" aria-labelledby="submissionBlogTab" hidden><div class="field-label"><span>可选 · 1 分</span>
+</div><p class="daily-challenge-status" id="dailyChallengeStatus" role="status"></p></section><section class="panel submission-editor-card editor-proof"><h2>通过截图</h2><label class="field-label"><span>必填 · 1 分</span><div class="upload-box"><input id="proofImage" aria-label="通过截图" name="proof" type="file" accept="image/png,image/jpeg,image/webp" required aria-describedby="proofHint" /><span class="upload-icon">↑</span><strong>点击上传或粘贴截图</strong><small id="proofHint">支持 PNG、JPG、WebP，单张不超过 5MB</small></div></label></section><section class="panel submission-editor-card editor-logic"><h2>题解思路</h2><label class="field-label"><span>可选 · 1 分</span><textarea id="logicText" aria-label="题解思路" name="logic" rows="4" placeholder="写下你的思路、关键算法或复杂度分析"></textarea></label></section><section class="panel submission-editor-card editor-blog"><div class="submission-material-tabs" role="tablist" aria-label="提交内容类型"><button type="button" id="submissionCodeTab" role="tab" aria-selected="true" aria-controls="submissionCodePane" data-submission-material="code">代码 <small class="material-requirement">必填</small></button><button type="button" id="submissionBlogTab" role="tab" aria-selected="false" aria-controls="submissionBlogPane" data-submission-material="blog">Blog <small class="material-requirement">可选</small></button></div><div id="submissionCodePane" class="submission-code-pane" role="tabpanel" aria-labelledby="submissionCodeTab"><label class="code-language-label">代码<select id="submissionCodeLanguage" name="code_language" aria-label="代码语言"><!-- submission-code-language-options --></select></label><div class="submission-code-editor"><pre id="submissionCodeHighlight" aria-hidden="true"><code></code></pre><textarea id="submissionCodeInput" name="code" maxlength="200000" aria-label="题目代码" placeholder="在此填写解题代码" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea></div></div><div id="submissionBlogPane" class="submission-blog-pane" role="tabpanel" aria-labelledby="submissionBlogTab" hidden><div class="field-label"><span>可选 · 1 分</span>
 <button type="button" class="blog-open-button" id="blogOpenButton">
 <span class="icon">✎</span>
 <span>打开 Markdown 编辑器</span>
@@ -276,7 +282,7 @@
 </div>
 <div class="blog-editor-content">
 <div class="blog-editor-pane active" data-pane="write">
-<textarea id="blogMarkdownInput" placeholder="支持 Markdown 和 LaTeX 公式...&#10;&#10;示例：&#10;# 一级标题&#10;## 二级标题&#10;&#10;**粗体** *斜体* `代码`&#10;&#10;行内公式：$f(x) = x^2$&#10;&#10;块级公式：&#10;$$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$&#10;&#10;- 列表项 1&#10;- 列表项 2&#10;&#10;[链接文本](https://example.com)&#10;&#10;> 引用内容"></textarea>
+<textarea id="blogMarkdownInput" class="blog-markdown-input" aria-label="Blog 内容" placeholder="支持 Markdown 和 LaTeX 公式...&#10;&#10;示例：&#10;# 一级标题&#10;## 二级标题&#10;&#10;**粗体** *斜体* `代码`&#10;&#10;行内公式：$f(x) = x^2$&#10;&#10;块级公式：&#10;$$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$$&#10;&#10;- 列表项 1&#10;- 列表项 2&#10;&#10;[链接文本](https://example.com)&#10;&#10;> 引用内容"></textarea>
 </div>
 <div class="blog-editor-pane" data-pane="preview">
 <div class="blog-preview" id="blogPreview">
@@ -333,10 +339,11 @@
     <script src="/static/code-colors.js"></script>
     <script src="community.js?v=shop-titles-20261104"></script>
     <script src="/static/member-titles.js?v=universal-20261105d"></script>
-    <script src="workbench.js?v=universal-20261105d"></script>
+    <script src="/static/data-structures.js?v=collection-version"></script>
+    <script src="workbench.js?v=collection-version"></script>
     <script src="/static/team-management.js?v=shop-titles-20261104"></script>
     <script src="/static/team-notifications.js?v=20261102"></script>
-    <script src="static/blog-editor.js?v=ui-20261101l"></script>
+    <script src="static/blog-editor.js?v=data-structure-blog"></script>
     <script src="contests.js"></script>
     <script src="tracker.js"></script>
     <script src="static/shop-images.js?v=shop-images-20261101b"></script>
@@ -354,7 +361,7 @@
   <script src="activity-dates.js?v=activity-review-fixes-20261104"></script>
   <script src="activity-data.js?v=activity-review-fixes-20261104"></script>
   <script src="activity-view.js?v=activity-review-fixes-20261104"></script>
-  <script src="app.js?v=cosmetic-roster-refresh-20261104"></script>
+  <script src="app.js?v=implementation-scope"></script>
   <script src="static/glass-drag.js?v=ranking-20261101"></script>
   </body>
 </html>

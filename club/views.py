@@ -18,6 +18,7 @@ from django.db.models import Count, Q, Sum
 from django.http import FileResponse, Http404, JsonResponse
 from django.middleware.csrf import get_token
 from django.utils import timezone
+from django.utils.html import format_html_join
 from django.views.decorators.csrf import ensure_csrf_cookie
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -26,7 +27,7 @@ from functools import wraps
 
 from .models import AccountClosure, FileDeletion, ReviewLog, Semester, SemesterMemberTotal, Submission, SubmissionPart, Team, TeamMembership, Week, create_internal_username
 from .services import build_weeks, progress_rows, qualified, refresh_totals, week_bounds, score_part
-from .submission_content import normalize_logic
+from .submission_content import CODE_LANGUAGES, normalize_logic
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -172,7 +173,8 @@ def frontend(request):
         raise Http404
     get_token(request)
     raw = repair_text(path.read_text(encoding="utf-8-sig"))
-    from django.http import HttpResponse
+    language_options = format_html_join("", '<option value="{}">{}</option>', CODE_LANGUAGES.items())
+    raw = raw.replace("<!-- submission-code-language-options -->", language_options)
     response = HttpResponse(raw, content_type="text/html; charset=utf-8")
     response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response["Pragma"] = "no-cache"
@@ -622,7 +624,7 @@ def submissions(request, submission_id=None, edit=False):
     code_language = request.POST.get('code_language', 'text')
     if not sandbox and not code.strip():
         return api_error('请填写解题代码')
-    if code_language not in {'text','cpp','c','python','java','javascript','typescript','go','rust','csharp','kotlin','swift','sql','bash'}:
+    if code_language not in CODE_LANGUAGES:
         return api_error('请选择有效的代码语言')
     if len(code) > 200000:
         return api_error('代码最多200000字')

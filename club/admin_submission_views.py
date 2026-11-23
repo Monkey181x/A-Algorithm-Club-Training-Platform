@@ -6,7 +6,7 @@ from django.http import JsonResponse
 from .views import api_login_required,api_error,body,membership_for,serialize_submission,score_part
 from .models import Submission,SubmissionPart,Semester,ReviewLog
 from .services import refresh_totals
-from .submission_content import normalize_logic
+from .submission_content import CODE_LANGUAGES, normalize_logic
 
 
 @api_login_required
@@ -26,7 +26,7 @@ def edit_submission(request,submission_id):
     for key,limit in [('logic',50000),('blog',100000),('code',200000)]:
         if not isinstance(data.get(key,''),str) or len(data.get(key,''))>limit:return api_error('题解内容过长或格式无效')
     language=data.get('code_language','text')
-    if language not in {'text','cpp','c','python','java','javascript','typescript','go','rust','csharp','kotlin','swift','sql','bash'}:return api_error('代码语言无效')
+    if not isinstance(language, str) or language not in CODE_LANGUAGES:return api_error('代码语言无效')
     if not data.get('code','').strip():return api_error('请填写解题代码')
     with transaction.atomic():
         User.objects.select_for_update().get(pk=target.member.user_id)

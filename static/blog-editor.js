@@ -1,100 +1,31 @@
-// Blog 浮窗编辑器 - 完整功能实现
-(function() {
-  'use strict';
+(() => {
+  let submissionEditor;
 
-  let currentTab = 'write';
-  let blogContent = '';
+  function bindEditor(root) {
+    const input = root.querySelector('.blog-markdown-input');
+    const preview = root.querySelector('.blog-preview');
+    const tabs = [...root.querySelectorAll('.blog-editor-tab')];
+    const panes = [...root.querySelectorAll('.blog-editor-pane')];
+    let previewTimeout;
 
-  function initBlogEditor() {
-    const openButton = document.getElementById('blogOpenButton');
-    const overlay = document.getElementById('blogEditorOverlay');
-    const closeButton = document.getElementById('blogEditorClose');
-    const cancelButton = document.getElementById('blogEditorCancel');
-    const saveButton = document.getElementById('blogEditorSave');
-    const markdownInput = document.getElementById('blogMarkdownInput');
-    const previewPane = document.getElementById('blogPreview');
-    const tabs = document.querySelectorAll('.blog-editor-tab');
-    const toolbarButtons = document.querySelectorAll('.toolbar-btn');
-
-    if (!openButton || !overlay || !markdownInput) return;
-    // Keep viewport positioning outside the submission modal's transformed,
-    // scrollable and backdrop-filtered containing block.
-    document.body.append(overlay);
-
-    // 配置 marked.js
-    if (typeof marked !== 'undefined') {
-      marked.setOptions({
-        breaks: true,
-        gfm: true,
-        headerIds: false,
-        mangle: false
-      });
-    }
-
-    // 打开编辑器
-    function openEditor() {
-      overlay.setAttribute('aria-hidden', 'false');
-      document.body.style.overflow = 'hidden';
-      setTimeout(() => markdownInput.focus(), 350);
-    }
-
-    // 关闭编辑器
-    function closeEditor() {
-      overlay.setAttribute('aria-hidden', 'true');
-      document.body.style.overflow = '';
-    }
-
-    // 保存并关闭
-    function saveAndClose() {
-      blogContent = markdownInput.value.trim();
-      closeEditor();
-    }
-
-    // 标签切换
-    function switchTab(targetTab) {
-      currentTab = targetTab;
-
-      tabs.forEach(t => t.classList.remove('active'));
-      document.querySelector(`[data-tab="${targetTab}"]`).classList.add('active');
-
-      document.querySelectorAll('.blog-editor-pane').forEach(pane => {
-        pane.classList.remove('active');
-      });
-
-      const targetPane = document.querySelector(`[data-pane="${targetTab}"]`);
-      if (targetPane) targetPane.classList.add('active');
-
-      // 切换到预览时渲染
-      if (targetTab === 'preview') {
-        renderPreview();
-      }
-    }
-
-    // 渲染预览
     function renderPreview() {
-      const markdown = markdownInput.value.trim();
-
+      const markdown = input.value.trim();
       if (!markdown) {
-        previewPane.innerHTML = '<p class="preview-placeholder">预览将显示在这里...</p>';
+        preview.innerHTML = '<p class="preview-placeholder">预览将显示在这里...</p>';
         return;
       }
-
-      try {
-        // Reuse the submission reader's HTML filtering without changing editor controls.
-        if (typeof renderSubmissionBlog === 'function') {
-          renderSubmissionBlog(previewPane, markdown);
-        } else {
-          previewPane.textContent = markdown;
-        }
-      } catch (error) {
-        console.error('Markdown 渲染错误:', error);
-        previewPane.innerHTML = '<p style="color: #cc0000;">预览渲染失败，请检查 Markdown 语法</p>';
-      }
+      if (typeof renderSubmissionBlog === 'function') renderSubmissionBlog(preview, markdown);
+      else preview.textContent = markdown;
     }
 
-    // Markdown 格式化工具栏功能
+    function selectTab(targetTab) {
+      tabs.forEach(tab => tab.classList.toggle('active', tab.dataset.tab === targetTab));
+      panes.forEach(pane => pane.classList.toggle('active', pane.dataset.pane === targetTab));
+      if (targetTab === 'preview') renderPreview();
+    }
+
     function insertMarkdown(action) {
-      const textarea = markdownInput;
+      const textarea = input;
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
       const selectedText = textarea.value.substring(start, end);
@@ -155,89 +86,103 @@
       textarea.setSelectionRange(start + cursorOffset, start + cursorOffset);
     }
 
-    // 事件监听
-    openButton.addEventListener('click', openEditor);
-    closeButton.addEventListener('click', closeEditor);
-    cancelButton.addEventListener('click', closeEditor);
-    saveButton.addEventListener('click', saveAndClose);
-
-    // 点击遮罩层关闭
-
-
-    // ESC 键关闭
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape' && overlay.getAttribute('aria-hidden') === 'false') {
-        closeEditor();
+    tabs.forEach(tab => tab.addEventListener('click', () => selectTab(tab.dataset.tab)));
+    root.querySelectorAll('.toolbar-btn').forEach(button => {
+      button.addEventListener('click', () => insertMarkdown(button.dataset.action));
+    });
+    input.addEventListener('input', () => {
+      clearTimeout(previewTimeout);
+      if (root.querySelector('[data-tab="preview"]').classList.contains('active')) {
+        previewTimeout = setTimeout(renderPreview, 500);
       }
     });
 
-    // 标签切换
-    tabs.forEach(tab => {
-      tab.addEventListener('click', function() {
-        switchTab(this.dataset.tab);
-      });
+    return {input, selectTab};
+  }
+
+  function initSubmissionEditor() {
+    const openButton = document.getElementById('blogOpenButton');
+    const overlay = document.getElementById('blogEditorOverlay');
+    if (!openButton || !overlay) return;
+    document.body.append(overlay);
+
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({breaks: true, gfm: true, headerIds: false, mangle: false});
+    }
+
+    submissionEditor = bindEditor(overlay);
+    openButton.addEventListener('click', () => {
+      overlay.setAttribute('aria-hidden', 'false');
+      document.body.style.overflow = 'hidden';
+      setTimeout(() => submissionEditor.input.focus(), 350);
     });
 
-    // 工具栏按钮
-    toolbarButtons.forEach(btn => {
-      btn.addEventListener('click', function() {
-        insertMarkdown(this.dataset.action);
-      });
-    });
+    function closeEditor() {
+      overlay.setAttribute('aria-hidden', 'true');
+      document.body.style.overflow = '';
+    }
 
-    // 实时预览（可选，如果需要在编辑时实时更新）
-    let previewTimeout;
-    markdownInput.addEventListener('input', function() {
-      clearTimeout(previewTimeout);
-      previewTimeout = setTimeout(() => {
-        if (currentTab === 'preview') {
-          renderPreview();
-        }
-      }, 500);
+    ['blogEditorClose', 'blogEditorCancel', 'blogEditorSave'].forEach(id => {
+      overlay.querySelector('#' + id).addEventListener('click', closeEditor);
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && overlay.getAttribute('aria-hidden') === 'false') closeEditor();
     });
   }
 
-  // 获取编辑器内容
-  window.getBlogEditorContent = function() {
-    const input = document.getElementById('blogMarkdownInput');
-    return input ? input.value.trim() : '';
+  window.openMarkdownEditor = ({content, onSave}) => {
+    const source = document.querySelector('#blogEditorOverlay .blog-editor-modal');
+    const dialog = document.createElement('dialog');
+    dialog.id = 'dataStructureBlogEditor';
+    dialog.className = source.className;
+    dialog.setAttribute('aria-label', 'Markdown 编辑器');
+    dialog.append(...source.cloneNode(true).children);
+    const close = dialog.querySelector('#blogEditorClose');
+    const cancel = dialog.querySelector('#blogEditorCancel');
+    const save = dialog.querySelector('#blogEditorSave');
+    dialog.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'));
+
+    const {input, selectTab} = bindEditor(dialog);
+    input.value = content;
+    input.maxLength = 100000;
+    selectTab('write');
+    const error = document.createElement('p');
+    error.className = 'data-structure-error';
+    error.setAttribute('role', 'alert');
+    dialog.querySelector('.blog-editor-footer').before(error);
+    close.onclick = cancel.onclick = () => dialog.close();
+    save.onclick = () => {
+      const markdown = input.value.trim();
+      if (markdown.length > input.maxLength) {
+        error.textContent = 'Blog 最多 100000 字';
+        return;
+      }
+      onSave(markdown);
+      dialog.close();
+    };
+    dialog.addEventListener('close', () => dialog.remove(), {once: true});
+    document.body.append(dialog);
+    dialog.showModal();
+    input.focus();
   };
 
-  // 设置编辑器内容
-  window.setBlogEditorContent = function(content) {
+  window.getBlogEditorContent = () => document.getElementById('blogMarkdownInput')?.value.trim() || '';
+
+  window.setBlogEditorContent = content => {
     const input = document.getElementById('blogMarkdownInput');
-    if (input) {
-      input.value = content || '';
-    }
+    if (input) input.value = content || '';
   };
 
-  // 清空编辑器
-  window.clearBlogEditor = function() {
-    const input = document.getElementById('blogMarkdownInput');
+  window.clearBlogEditor = () => {
+    window.setBlogEditorContent('');
+    submissionEditor?.selectTab('write');
     const preview = document.getElementById('blogPreview');
-
-    if (input) input.value = '';
     if (preview) preview.innerHTML = '<p class="preview-placeholder">预览将显示在这里...</p>';
-
-    currentTab = 'write';
-
-    // 切换回编辑标签
-    const tabs = document.querySelectorAll('.blog-editor-tab');
-    const panes = document.querySelectorAll('.blog-editor-pane');
-    tabs.forEach((tab, i) => {
-      if (i === 0) tab.classList.add('active');
-      else tab.classList.remove('active');
-    });
-    panes.forEach((pane, i) => {
-      if (i === 0) pane.classList.add('active');
-      else pane.classList.remove('active');
-    });
   };
 
-  // DOM 加载完成后初始化
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initBlogEditor);
+    document.addEventListener('DOMContentLoaded', initSubmissionEditor);
   } else {
-    initBlogEditor();
+    initSubmissionEditor();
   }
 })();
