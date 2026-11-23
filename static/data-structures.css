@@ -10,7 +10,6 @@
   text-align: left;
 }
 
-.data-structure-item:hover,
 .data-structure-item:focus-visible {
   outline: 2px solid var(--site-accent, var(--teal));
   outline-offset: 2px;
@@ -146,6 +145,12 @@ html body .data-structure-editor textarea {
   background: transparent !important;
 }
 
+.data-structure-dialog .data-structure-editor textarea:focus {
+  outline: none;
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--site-accent, var(--teal)) 20%, var(--site-border, var(--line)));
+}
+
 .data-structure-dialog .material-requirement {
   margin-left: 5px;
   font-size: .7em;
@@ -268,6 +273,10 @@ html body .data-structure-editor textarea::placeholder {
 
 .data-structure-implementation-actions span {
   font-size: 12px;
+}
+
+.data-structure-implementation-actions .score {
+  display: inline;
 }
 
 .data-structure-implementation-actions button {

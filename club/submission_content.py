@@ -17,6 +17,15 @@ CODE_LANGUAGES = {
     "bash": "Shell",
 }
 
+DATA_STRUCTURE_VALID_SUBMISSIONS = 2
+DATA_STRUCTURE_CODE_POINTS = 2
+DATA_STRUCTURE_BLOG_POINTS = 2
+
+
+def data_structure_points(blog):
+    return DATA_STRUCTURE_CODE_POINTS + (DATA_STRUCTURE_BLOG_POINTS if (blog or "").strip() else 0)
+
+
 # Display placeholders are never submitted solution content.
 EMPTY_LOGIC_TEXTS={'未提交题解思路。','未提交题解思路.','未提交题解思路'}
 

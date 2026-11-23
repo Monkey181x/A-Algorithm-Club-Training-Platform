@@ -3,9 +3,10 @@ from datetime import date, timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from .models import Semester, Team, Week
+from .models import DataStructureImplementation, Semester, Team, Week
 from .services import build_weeks, refresh_totals, validate_week_dates
 
 
@@ -63,6 +64,17 @@ def align_semester(semester, day=None, *, dates=None):
         raise ValidationError('学期起止日期无效，最长为400天')
     if semester.submissions.filter(record_date__lt=start).exists() or semester.submissions.filter(record_date__gt=end).exists():
         raise ValidationError('存在新学期范围外的提交，未作调整，请先检查这些记录')
+    structures = DataStructureImplementation.objects.filter(training_week__semester=semester)
+    if structures.filter(Q(training_date__lt=start) | Q(training_date__gt=end)).exists():
+        raise ValidationError('存在新学期范围外的数据结构提交，未作调整')
+    # Older records only have a week and a last edit time. A later edit cannot
+    # establish the original day, but it does bound the latest possible day.
+    undated = structures.filter(training_date__isnull=True)
+    if ((start > semester.starts_on and undated.filter(training_week__starts_at__date__lt=start).exists())
+            or (end < semester.ends_on and undated.filter(
+                training_week__ends_at__date__gt=end + timedelta(days=1), updated_at__date__gt=end,
+            ).exists())):
+        raise ValidationError('调整可能排除首次计分日期未知的历史数据结构提交，未作调整')
     if Semester.objects.filter(team=semester.team, starts_on__lte=end, ends_on__gte=start).exclude(pk=semester.pk).exists():
         raise ValidationError('调整后的日期与其他学期重叠，未作调整')
     monday = start - timedelta(days=start.weekday())
@@ -71,7 +83,7 @@ def align_semester(semester, day=None, *, dates=None):
     for week in weeks:
         week_day = timezone.localdate(week.starts_at)
         if week_day > end or timezone.localdate(week.ends_at) <= start:
-            if week.submissions.exists():
+            if week.submissions.exists() or week.data_structure_submissions.exists():
                 raise ValidationError('范围外周次仍有关联提交，未作调整')
             week.delete()
         else:

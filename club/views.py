@@ -14,7 +14,7 @@ from pathlib import Path
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Q
 from django.http import FileResponse, Http404, JsonResponse
 from django.middleware.csrf import get_token
 from django.utils import timezone
@@ -25,9 +25,9 @@ from openpyxl.utils import get_column_letter
 from django.contrib.auth.hashers import check_password
 from functools import wraps
 
-from .models import AccountClosure, FileDeletion, ReviewLog, Semester, SemesterMemberTotal, Submission, SubmissionPart, Team, TeamMembership, Week, create_internal_username
+from .models import AccountClosure, DataStructureImplementation, FileDeletion, ReviewLog, Semester, SemesterMemberTotal, Submission, SubmissionPart, Team, TeamMembership, Week, create_internal_username
 from .services import build_weeks, progress_rows, qualified, refresh_totals, week_bounds, score_part
-from .submission_content import CODE_LANGUAGES, normalize_logic
+from .submission_content import CODE_LANGUAGES, DATA_STRUCTURE_VALID_SUBMISSIONS, normalize_logic
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -396,9 +396,9 @@ def dashboard(request):
     week = active_week(semester)
     if not week:
         week = semester.weeks.order_by("-number").first()
-    parts = SubmissionPart.objects.filter(submission__member=membership, submission__week=week, submission__is_valid=True, status=SubmissionPart.APPROVED)
-    score = parts.aggregate(total=Sum("points_awarded"))["total"] or 0
-    count = member_week_submissions(membership, week)
+    scores, counts = progress_rows(semester, week, [membership.id])
+    score = scores.get(membership.id, 0)
+    count = counts.get(membership.id, 0)
     pending_parts = SubmissionPart.objects.filter(submission__member=membership, submission__week=week, status=SubmissionPart.PENDING).count()
     rows = leaderboard_rows_for(membership.team, semester, week)
     current_rank = next((row["rank"] for row in rows if row["memberId"] == membership.id), None)
@@ -521,6 +521,24 @@ def members(request):
     return JsonResponse({'members': rows, 'team_name': membership.team.name})
 
 
+def credited_structure_rows(member):
+    return DataStructureImplementation.objects.filter(
+        member=member, collection__team_id=member.team_id, training_points__gt=0,
+        training_week__isnull=False, training_week__semester__archived_at__isnull=True,
+    )
+
+
+def structure_history_items(query):
+    return [{
+        "kind": "data_structure", "id": pk, "name": name, "week": week, "semester_name": semester,
+        "language": CODE_LANGUAGES.get(language, language), "updated_at": updated,
+        "training_points": points, "training_submissions": DATA_STRUCTURE_VALID_SUBMISSIONS,
+    } for pk, name, week, semester, language, updated, points in query.values_list(
+        "pk", "collection__name", "training_week__number", "training_week__semester__name",
+        "language", "updated_at", "training_points",
+    )]
+
+
 @api_login_required
 def member_history(request, member_id):
     viewer = membership_for(request)
@@ -552,11 +570,18 @@ def member_history(request, member_id):
         queryset = queryset.filter(week__semester=semester, week__number=week_id)
     visible_submissions = list(queryset)
     summary_week = semester.weeks.filter(number=week_id).first() if week_id and semester else None
-    scores, counts = progress_rows(semester, summary_week, [target.id], [item.id for item in visible_submissions])
+    structure_items = []
+    scores, counts = ({}, {})
+    if semester and (not week_id or summary_week):
+        scores, counts = progress_rows(semester, summary_week, [target.id])
+        structures = credited_structure_rows(target).filter(training_week__semester=semester)
+        if summary_week:
+            structures = structures.filter(training_week=summary_week)
+        structure_items = structure_history_items(structures)
     summary_score = scores.get(target.id, 0)
     summary_submissions = counts.get(target.id, 0)
     summary_qualified = qualified(summary_score, summary_submissions, summary_week) if summary_week else None
-    return JsonResponse({"member": {"id": target.id, "name": target.display_name}, "summary": {"score": summary_score, "submissions": summary_submissions, "qualified": summary_qualified}, "submissions": [serialize_submission(item, True, parts=None if viewer.is_admin or target.id == viewer.id else [part for part in item.parts.all() if part.status == SubmissionPart.APPROVED]) for item in visible_submissions]})
+    return JsonResponse({"member": {"id": target.id, "name": target.display_name}, "summary": {"score": summary_score, "submissions": summary_submissions, "qualified": summary_qualified}, "data_structure_submissions": structure_items, "submissions": [serialize_submission(item, True, parts=None if viewer.is_admin or target.id == viewer.id else [part for part in item.parts.all() if part.status == SubmissionPart.APPROVED]) for item in visible_submissions]})
 
 
 @api_login_required
@@ -884,6 +909,21 @@ def export_xlsx(request):
         row[0].data_type = 's'
     for column, value in enumerate(headers, 1):
         sheet.column_dimensions[get_column_letter(column)].width = max(12, len(value) + 2)
+    structures = workbook.create_sheet("数据结构提交")
+    structures.append(["成员姓名", "数据结构", "语言", "归属周次", "首次计分日期", "状态", "有效提交次数", "积分"])
+    rows = DataStructureImplementation.objects.filter(
+        collection__team=team, training_week__semester=semester, member__isnull=False,
+    ).order_by("training_week__number", "member_id", "pk").values_list(
+        "member__display_name", "collection__name", "language", "training_week__number",
+        "training_date", "is_rejected", "training_points",
+    )
+    for row_number, (name, structure, language, week, day, rejected, points) in enumerate(rows.iterator(), 2):
+        structures.append([name, structure, CODE_LANGUAGES.get(language, language), week, day or "日期未知",
+                           "已驳回" if rejected else "已提交", DATA_STRUCTURE_VALID_SUBMISSIONS if points else 0, points])
+        for column in (1, 2, 3):
+            structures.cell(row_number, column).data_type = 's'
+    for column, width in enumerate([20, 28, 16, 12, 18, 12, 18, 12], 1):
+        structures.column_dimensions[get_column_letter(column)].width = width
     response = FileResponse(_workbook_file(workbook), as_attachment=True, filename=f"{team.code}-{semester.name}-export.xlsx")
     return response
 

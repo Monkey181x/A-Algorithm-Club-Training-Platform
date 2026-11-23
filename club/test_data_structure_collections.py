@@ -1,7 +1,24 @@
+from datetime import datetime, time, timedelta
+from io import BytesIO
+from unittest.mock import patch
+from uuid import uuid4
+
+from openpyxl import load_workbook
+from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
-from .models import DataStructureCollection, Submission, Team, TeamMembership
+from .astrbot_notifications import queue_weekly_reminders
+from .models import (
+    AstrBotNotification, CheckinRecord, DataStructureCollection, DataStructureImplementation, Semester,
+    SemesterMemberTotal, Submission, SubmissionPart, Team, TeamMembership, TeamNotificationSettings, UserProfile,
+)
+from .semester_calendar import align_semester
+from .services import build_weeks, progress_rows, settle_week
 
 
 @override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
@@ -10,7 +27,7 @@ class DataStructureCollectionTests(TestCase):
     config = {
         "name": "并查集",
         "requirements": "支持路径压缩",
-        "languages": ["cpp", "python"],
+        "languages": ["cpp", "python", "text"],
         "is_open": True,
     }
     code = "def find(x):\n    return parent[x]\n"
@@ -49,6 +66,94 @@ class DataStructureCollectionTests(TestCase):
             f"{url}/implementations", {"language": language, "code": self.code},
             content_type="application/json",
         )
+
+    def test_structure_credit_date_survives_edits_and_guards_both_term_boundaries(self):
+        url = self.create_collection()
+        self.log_in(self.member)
+        today = timezone.localdate()
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        term = Semester.objects.create(team=self.member.team, name="训练", starts_on=monday, ends_on=sunday)
+        week = build_weeks(term)[0]
+        with patch("django.utils.timezone.now", return_value=week.starts_at + timedelta(hours=12)):
+            first = self.submit(url).json()
+        with patch("django.utils.timezone.now", return_value=week.ends_at - timedelta(hours=12)):
+            self.assertEqual(self.submit(url).status_code, 201)
+            edit = self.client.patch(f"{url}/implementations/{first['id']}", {"code": "updated"}, content_type="application/json")
+            self.assertEqual(edit.status_code, 200)
+        self.assertEqual(DataStructureImplementation.objects.get(pk=first["id"]).training_date, monday)
+        for dates in [(monday + timedelta(days=1), sunday), (monday, sunday - timedelta(days=1))]:
+            with self.assertRaisesMessage(ValidationError, "范围外的数据结构提交"):
+                align_semester(term, dates=dates)
+        DataStructureImplementation.objects.update(training_date=None)
+        with self.assertRaisesMessage(ValidationError, "日期未知"):
+            align_semester(term, dates=(monday + timedelta(days=1), sunday))
+        align_semester(term, dates=(monday - timedelta(days=1), sunday + timedelta(days=1)))
+
+    def test_active_export_includes_structure_credit_and_rejections(self):
+        url = self.create_collection()
+        today = timezone.localdate()
+        term = Semester.objects.create(team=self.member.team, name="训练", starts_on=today, ends_on=today + timedelta(days=7))
+        DataStructureCollection.objects.filter(team=self.member.team).update(name="=literal")
+        self.log_in(self.member)
+        first = self.submit(url).json()
+        second = self.client.post(f"{url}/implementations", {"language":"text", "code":"ok", "blog":"说明"},
+                                  content_type="application/json").json()
+        self.log_in(self.admin)
+        rejection = self.client.patch(f"{url}/implementations/{first['id']}", {"action":"reject", "rejection_note":"请修改"},
+                                      content_type="application/json")
+        self.assertEqual(rejection.status_code, 200)
+        response = self.client.get("/api/export", {"semester": term.pk})
+        book = load_workbook(BytesIO(b"".join(response.streaming_content)))
+        self.assertEqual(book.sheetnames, ["提交与审核", "数据结构提交"])
+        sheet = book["数据结构提交"]
+        self.assertEqual(sheet["B2"].data_type, "s")
+        self.assertEqual(sheet["E3"].value.date(), today)
+        rows = list(sheet.values)[1:]
+        self.assertEqual([r[5:] for r in rows], [("已驳回", 0, 0), ("已提交", 2, 4)])
+        self.assertEqual(rows[1][:4], (self.member.display_name, "=literal", "纯文本", 1))
+        self.assertEqual(second["training_points"], 4)
+
+    def test_retried_create_counts_once_and_history_explains_credit(self):
+        url = self.create_collection()
+        self.log_in(self.member)
+        today = timezone.localdate()
+        semester = Semester.objects.create(team=self.member.team, name="训练", starts_on=today, ends_on=today + timedelta(days=13))
+        week = build_weeks(semester)[0]
+        payload = {"language": "text", "code": "one", "request_id": str(uuid4())}
+        def post():
+            return self.client.post(f"{url}/implementations", payload, content_type="application/json")
+
+        first = post()
+        self.assertEqual(first.status_code, 201)
+        replay = post()
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(first.json()["id"], replay.json()["id"])
+        self.assertEqual(progress_rows(semester, week), ({self.member.pk: 2}, {self.member.pk: 2}))
+        payload["code"] = "two"
+        self.assertEqual(post().status_code, 409)
+        payload["request_id"] = str(uuid4())
+        payload["blog"] = " blog "
+        second = post()
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(post().status_code, 200)
+        self.assertEqual(progress_rows(semester, week), ({self.member.pk: 6}, {self.member.pk: 4}))
+        with CaptureQueriesContext(connection) as queries:
+            listing = self.client.get(url)
+        self.assertEqual(len(listing.json()["implementations"]), 2)
+        selects = [q["sql"] for q in queries if 'FROM "club_datastructureimplementation"' in q["sql"]]
+        self.assertTrue(selects)
+        for sql in selects:
+            for field in ("code", "blog", "notes"):
+                self.assertNotIn(f'"club_datastructureimplementation"."{field}"', sql)
+        self.log_in(self.reader)
+        params = {"week": week.number, "semester": semester.pk}
+        history = self.client.get(f"/api/members/{self.member.pk}/history", params).json()
+        self.assertEqual([r["training_points"] for r in history["data_structure_submissions"]], [4, 2])
+        self.assertEqual(history["summary"]["score"], 6)
+        profile = self.client.get(f"/api/members/{self.member.pk}/profile").json()
+        self.assertEqual(profile["total"], 2)
+        self.assertEqual(profile["submissions"], history["data_structure_submissions"])
 
     def test_create_rejects_a_stale_team_selection(self):
         self.log_in(self.admin)
@@ -147,7 +252,6 @@ class DataStructureCollectionTests(TestCase):
 
         self.log_in(self.member)
         self.assertEqual(self.client.get(entry_url).status_code, 404)
-        self.assertEqual(self.client.get(url).json()["submitted_languages"], ["python"])
         own = self.client.get(f"{self.endpoint}?scope=mine").json()["collections"]
         self.assertEqual(own[0]["implementation_count"], 1)
         original = self.client.get(f"{entry_url}?scope=mine").json()
@@ -164,14 +268,14 @@ class DataStructureCollectionTests(TestCase):
         self.assertEqual(updated.json()["id"], original["id"])
         self.assertFalse(updated.json()["is_rejected"])
         self.assertEqual(updated.json()["rejection_note"], "")
-        self.assertEqual(self.submit(url).status_code, 409)
+        self.assertEqual(DataStructureImplementation.objects.count(), 1)
 
         self.log_in(self.reader)
         published = self.client.get(entry_url).json()
         self.assertEqual(published["code"], resubmit["code"])
         self.assertEqual(published["blog"], resubmit["blog"])
 
-    def test_submission_is_team_scoped_and_one_per_language(self):
+    def test_submission_is_team_scoped_and_allows_repeated_languages(self):
         url = self.create_collection()
         self.log_in(self.outsider)
         self.assertEqual(self.client.get(url).status_code, 404)
@@ -182,13 +286,16 @@ class DataStructureCollectionTests(TestCase):
         self.assertEqual(self.submit(url, "java").status_code, 400)
         saved = self.submit(url)
         self.assertEqual(saved.status_code, 201, saved.content)
-        self.assertEqual(self.submit(url).status_code, 409)
+        another = self.submit(url)
+        self.assertEqual(another.status_code, 201)
+        self.assertNotEqual(saved.json()["id"], another.json()["id"])
         self.assertEqual(self.submit(url, "cpp").status_code, 201)
         entry_url = f"{url}/implementations/{saved.json()['id']}"
         self.assertEqual(self.client.get(entry_url).json()["code"], self.code)
         updated = self.client.patch(entry_url, {"code": "# updated"}, content_type="application/json")
         self.assertEqual(updated.status_code, 200, updated.content)
         self.assertEqual(self.client.get(entry_url).json()["code"], "# updated")
+        self.assertEqual(self.client.get(f"{url}/implementations/{another.json()['id']}").json()["code"], self.code)
         self.assertFalse(Submission.objects.exists())
 
         self.log_in(self.reader)
@@ -272,6 +379,123 @@ class DataStructureCollectionTests(TestCase):
         self.assertEqual(reorder([second, first], [first, second]).status_code, 409)
         self.log_in(self.member)
         self.assertEqual(displayed_ids(), [second, first, third])
+
+    def test_training_credit_tracks_original_week_through_blog_changes_and_rejection(self):
+        url = self.create_collection()
+        self.log_in(self.member)
+        legacy = self.submit(url, "cpp")
+        self.assertEqual(legacy.status_code, 201, legacy.content)
+        self.assertEqual(legacy.json()["training_points"], 0)
+
+        today = timezone.localdate()
+        monday = today - timedelta(days=today.weekday())
+        semester = Semester.objects.create(
+            team=self.member.team, name="计分测试", starts_on=monday, ends_on=monday + timedelta(days=13),
+            min_submissions=2, min_score=4,
+        )
+        first_week, second_week = build_weeks(semester)
+        self.assertTrue(self.client.get(url).json()["training_rules"]["available"])
+        fresh = self.submit(url)
+        self.assertEqual(fresh.status_code, 201, fresh.content)
+        self.assertEqual((fresh.json()["training_submissions"], fresh.json()["training_points"]), (2, 2))
+        entry_url = f"{url}/implementations/{fresh.json()['id']}"
+        legacy_url = f"{url}/implementations/{legacy.json()['id']}"
+        edited_legacy = self.client.patch(
+            legacy_url, {"code": self.code, "blog": "旧实现补 Blog"}, content_type="application/json",
+        )
+        self.assertEqual(edited_legacy.json()["training_points"], 0)
+
+        regular = Submission.objects.create(
+            team=self.member.team, member=self.member, semester=semester, week=first_week, record_date=today,
+        )
+        SubmissionPart.objects.create(
+            submission=regular, kind=SubmissionPart.PROOF, status=SubmissionPart.APPROVED, points_awarded=1,
+        )
+        dashboard = self.client.get("/api/dashboard").json()
+        self.assertEqual((dashboard["submissions"], dashboard["score"]), (3, 3))
+        self.assertFalse(CheckinRecord.objects.exists())
+
+        edited = self.client.patch(
+            entry_url, {"code": self.code, "blog": "支持按秩合并"}, content_type="application/json",
+        )
+        self.assertEqual((edited.json()["training_submissions"], edited.json()["training_points"]), (2, 4))
+        settled = settle_week(first_week)
+        self.assertTrue(settled.is_closed)
+        total = SemesterMemberTotal.objects.get(semester=semester, member=self.member)
+        self.assertEqual((total.total_submissions, total.total_score, total.qualified_weeks), (3, 5, 1))
+
+        next_week = timezone.make_aware(datetime.combine(monday + timedelta(days=7), time(12)))
+        with patch("django.utils.timezone.now", return_value=next_week):
+            self.log_in(self.admin)
+            rejected = self.client.patch(
+                entry_url, {"action": "reject", "rejection_note": "请修正复杂度"}, content_type="application/json",
+            )
+            self.assertEqual((rejected.json()["training_submissions"], rejected.json()["training_points"]), (0, 0))
+            total.refresh_from_db()
+            self.assertEqual((total.total_submissions, total.total_score, total.qualified_weeks), (1, 1, 0))
+
+            self.log_in(self.member)
+            retried = self.client.patch(
+                entry_url, {"action": "resubmit", "code": self.code, "blog": "   "}, content_type="application/json",
+            )
+            self.assertEqual((retried.json()["training_submissions"], retried.json()["training_points"]), (2, 2))
+            self.assertEqual(retried.json()["id"], fresh.json()["id"])
+
+        implementation = DataStructureImplementation.objects.get(pk=fresh.json()["id"])
+        self.assertEqual(implementation.training_week_id, first_week.pk)
+        scores, counts = progress_rows(semester, second_week, [self.member.pk])
+        self.assertEqual((scores.get(self.member.pk, 0), counts.get(self.member.pk, 0)), (0, 0))
+        total.refresh_from_db()
+        self.assertEqual((total.total_submissions, total.total_score, total.qualified_weeks), (3, 3, 0))
+
+    @override_settings(ASTRBOT_NOTIFY_URL="https://notify.invalid/club/notify")
+    def test_weekly_reminder_counts_data_structure_credit_without_new_wording(self):
+        url = self.create_collection()
+        now = timezone.now()
+        today = timezone.localdate(now)
+        Semester.objects.create(
+            team=self.member.team, name="提醒测试", starts_on=today, ends_on=today + timedelta(days=7),
+        )
+        TeamNotificationSettings.objects.create(
+            team=self.member.team, enabled=True, qualification_enabled=True,
+            encrypted_api_token="test", review_weekday=today.weekday(), review_time=time.min,
+        )
+        for member in (self.member, self.reader):
+            UserProfile.objects.create(user=member.user, admission_year=today.year)
+        self.log_in(self.member)
+        self.assertEqual(self.submit(url, "text").status_code, 201)
+        with_blog = self.client.post(
+            f"{url}/implementations", {"language": "text", "code": self.code, "blog": "说明"},
+            content_type="application/json",
+        )
+        self.assertEqual(with_blog.json()["training_points"], 4)
+        self.assertEqual(queue_weekly_reminders(now), 1)
+        reminder = AstrBotNotification.objects.get().payload
+        self.assertEqual([item["member_id"] for item in reminder["data"]["members"]], [self.reader.pk])
+        self.assertEqual(reminder["text"], f"本周尚未达标的同学有：\n{self.reader.display_name}（积分 0，有效提交 0）")
+
+    def test_archived_training_credit_is_preserved_when_library_code_is_edited(self):
+        url = self.create_collection()
+        self.log_in(self.member)
+        today = timezone.localdate()
+        semester = Semester.objects.create(
+            team=self.member.team, name="归档测试", starts_on=today, ends_on=today + timedelta(days=6),
+        )
+        saved = self.submit(url)
+        self.assertEqual(saved.status_code, 201, saved.content)
+        self.assertEqual(saved.json()["training_points"], 2)
+        Semester.objects.filter(pk=semester.pk).update(archived_at=timezone.now(), is_active=False)
+        entry_url = f"{url}/implementations/{saved.json()['id']}"
+        updated = self.client.patch(
+            entry_url, {"code": self.code, "blog": "归档后仍可维护代码"}, content_type="application/json",
+        )
+        self.assertEqual(updated.status_code, 200, updated.content)
+        self.assertEqual(updated.json()["training_points"], 2)
+        details = self.client.get(entry_url).json()
+        self.assertTrue(details["training_archived"])
+        self.assertEqual(details["blog"], "归档后仍可维护代码")
+        total = SemesterMemberTotal.objects.get(semester=semester, member=self.member)
+        self.assertEqual((total.total_submissions, total.total_score), (2, 2))
 
     def test_closing_preserves_published_code(self):
         url = self.create_collection()

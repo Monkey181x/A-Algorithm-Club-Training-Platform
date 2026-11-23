@@ -1019,6 +1019,7 @@ class DataStructureCollection(models.Model):
 
 
 class DataStructureImplementation(models.Model):
+    request_id = models.UUIDField(null=True)
     collection = models.ForeignKey(DataStructureCollection, on_delete=models.CASCADE, related_name="implementations")
     member = models.ForeignKey(TeamMembership, on_delete=models.SET_NULL, null=True)
     language = models.CharField(max_length=16)
@@ -1027,10 +1028,13 @@ class DataStructureImplementation(models.Model):
     blog = models.TextField(null=True, blank=True)
     is_rejected = models.BooleanField(default=False)
     rejection_note = models.TextField(blank=True, default='')
+    training_week = models.ForeignKey(Week, null=True, blank=True, on_delete=models.SET_NULL, related_name="data_structure_submissions")
+    training_date = models.DateField(null=True, editable=False)
+    training_points = models.PositiveSmallIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-updated_at", "-id"]
         constraints = [
-            models.UniqueConstraint(fields=["collection", "member", "language"], name="unique_structure_member_language"),
+            models.UniqueConstraint(fields=["collection", "member", "request_id"], name="unique_structure_create_request"),
         ]

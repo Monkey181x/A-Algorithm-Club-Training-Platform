@@ -69,8 +69,6 @@
 
   function renderCollection(data, scope, implementationScope) {
     const {collection, implementations, languages, can_submit: canSubmit} = data;
-    const submitted = new Set(data.submitted_languages);
-    const available = collection.languages.filter(language => !submitted.has(language));
     root.innerHTML = `
       <div class="data-structure-detail-toolbar" data-site-themed="true">
         <button type="button" class="secondary-button" data-back>${scope === 'manage' ? '返回管理工作台' : '返回列表'}</button>
@@ -84,7 +82,7 @@
       <section class="panel data-structure-panel">
         <div class="panel-heading">
           <h2 tabindex="-1">${escapeHtml(collection.name)}</h2>
-          ${scope !== 'manage' && canSubmit && available.length ? '<button type="button" class="primary-button" data-submit>提交代码</button>' : ''}
+          ${scope !== 'manage' && canSubmit && collection.languages.length ? '<button type="button" class="primary-button" data-submit>提交</button>' : ''}
         </div>
         <p class="muted">${collection.is_open ? '开放提交' : '已关闭提交'}</p>
         ${collection.requirements ? `<p class="data-structure-notes">${escapeHtml(collection.requirements)}</p>` : ''}
@@ -96,7 +94,7 @@
     };
     const reload = () => load(collection.id, {scope, implementationScope});
     const submit = root.querySelector('[data-submit]');
-    if (submit) submit.onclick = () => editImplementation(data, null, available, reload);
+    if (submit) submit.onclick = () => editImplementation(data, null, collection.languages, reload);
     const list = root.querySelector('[data-implementations]');
 
     function renderImplementations() {
@@ -154,12 +152,13 @@
       <div class="data-structure-implementation-actions">
         ${entry.is_mine ? '<span class="muted">我的实现</span>' : ''}
         ${entry.is_rejected ? '<span class="data-structure-rejected">已驳回</span>' : ''}
+        ${entry.training_points > 0 ? `<span class="score">+${Number(entry.training_points)} 分</span>` : ''}
         <button type="button" class="secondary-button" aria-label="查看详情：${escapeHtml(author)} · ${escapeHtml(language)}">查看详情</button>
       </div>
     </article>`;
   }
 
-  function openDialog(content) {
+  function openDialog(content, {focusContainer = false} = {}) {
     const dialog = document.createElement('dialog');
     dialog.className = 'data-structure-dialog';
     dialog.setAttribute('aria-labelledby', 'dataStructureDialogTitle');
@@ -167,12 +166,14 @@
     dialog.querySelector('h2').id = 'dataStructureDialogTitle';
     dialog.addEventListener('close', () => dialog.remove(), {once: true});
     dialog.querySelector('[data-close]').onclick = () => dialog.close();
+    if (focusContainer) dialog.tabIndex = -1;
     document.body.append(dialog);
     dialog.showModal();
+    if (focusContainer) dialog.focus({preventScroll: true});
     return dialog;
   }
 
-  function submitForm(dialog, save) {
+  function submitForm(dialog, save, validate) {
     const form = dialog.querySelector('form');
     const submit = form.querySelector('[type=submit]');
     const status = form.querySelector('[role=alert]');
@@ -181,7 +182,7 @@
     });
     form.onsubmit = async event => {
       event.preventDefault();
-      if (submit.disabled) return;
+      if (submit.disabled || (validate && !validate())) return;
       const values = new FormData(form);
       const label = submit.textContent;
       const controls = [...form.elements].filter(control => !control.disabled);
@@ -265,7 +266,10 @@
       const canEdit = scope !== 'manage' && entry.is_mine && canSubmit && collection.languages.includes(entry.language);
       const dialog = openDialog(`
         <h2>${escapeHtml(uiMemberName(entry.author))} · ${escapeHtml(languages[entry.language] || entry.language)}</h2>
-        ${entry.is_rejected ? `<p class="data-structure-notes"><strong>已驳回</strong> · ${entry.rejection_note ? escapeHtml(entry.rejection_note) : '旧记录未填写原因'}</p>` : ''}
+        ${entry.is_rejected ? `<p class="data-structure-notes"><strong>已驳回${entry.training_archived ? '' : ' · 不计分'}</strong> · ${entry.rejection_note ? escapeHtml(entry.rejection_note) : '旧记录未填写原因'}</p>` : ''}
+        ${entry.training_tracked && (!entry.is_rejected || entry.training_archived)
+          ? `<p class="muted">${entry.training_archived ? '归档时计入 · ' : ''}有效提交 ${Number(entry.training_submissions)} 次 · 积分 ${Number(entry.training_points)} 分</p>`
+          : !entry.is_rejected ? '<p class="muted">未计入训练统计</p>' : ''}
         ${materialTabs('structureDetail')}
         <div id="structureDetailCodePane" role="tabpanel" aria-labelledby="structureDetailCodeTab">
           <pre><code></code></pre>
@@ -315,27 +319,34 @@
         action: 'reject', rejection_note: values.get('rejection_note'), version: entry.updated_at,
       });
       showToast('已驳回，可由作者修改重交');
+      if (entry.training_tracked && !entry.training_archived) void loadDashboardSummary().catch(() => {});
       await load(collectionId, {scope: 'manage'});
     });
   }
 
-  function editImplementation({collection, languages}, entry, available, reload) {
-    const label = entry?.is_rejected ? '修改重交' : entry ? '保存修改' : '提交代码';
+  function editImplementation({collection, languages, training_rules: rules}, entry, available, reload) {
+    const countsForTraining = entry ? entry.training_tracked && !entry.training_archived : rules.available;
+    const requestId = entry ? null : window.clubApi.requestId();
+    const label = entry?.is_rejected ? '修改重交' : entry ? '保存修改' : '提交';
     const dialog = openDialog(`
       <form class="data-structure-form">
-        <h2>${entry?.is_rejected ? '修改重交' : entry ? '编辑代码' : '提交代码'} · ${escapeHtml(collection.name)}</h2>
+        <h2>${entry?.is_rejected ? '修改重交' : entry ? '编辑代码' : '提交'} · ${escapeHtml(collection.name)}</h2>
         <div>
           ${materialTabs('structureEdit', true)}
           <div id="structureEditCodePane" role="tabpanel" aria-labelledby="structureEditCodeTab">
+            <div class="field-label"><span>${countsForTraining
+              ? `必填 · ${Number(rules.code_points)} 分`
+              : entry?.training_archived ? '积分已随学期归档' : '本次不计入训练统计'}</span></div>
             <label class="code-language-label">代码语言 <select name="language" ${entry ? 'disabled' : ''}>
               ${available.map(language => `<option value="${escapeHtml(language)}">${escapeHtml(languages[language])}</option>`).join('')}
             </select></label>
             <div class="data-structure-editor">
               <pre aria-hidden="true"><code></code></pre>
-              <textarea name="code" aria-label="代码" placeholder="在此填写数据结构代码" maxlength="200000" required spellcheck="false" autocapitalize="off" wrap="off"></textarea>
+              <textarea name="code" aria-label="代码" placeholder="在此填写数据结构代码" maxlength="200000" aria-required="true" spellcheck="false" autocapitalize="off" wrap="off"></textarea>
             </div>
           </div>
           <div id="structureEditBlogPane" class="data-structure-blog-pane" role="tabpanel" aria-labelledby="structureEditBlogTab" hidden>
+            ${countsForTraining ? `<div class="field-label"><span>可选 · ${Number(rules.blog_points)} 分</span></div>` : ''}
             <button type="button" class="blog-open-button" data-open-blog>打开 Markdown 编辑器</button>
             <div class="blog-rendered editor-blog-preview" data-blog-summary></div>
           </div>
@@ -345,11 +356,23 @@
           <button type="button" class="secondary-button" data-close>取消</button>
           <button type="submit" class="primary-button">${label}</button>
         </div>
-      </form>`);
+      </form>
+      <div class="toast" role="status"></div>`, {focusContainer: true});
     const selectTab = bindMaterialTabs(dialog);
     const {code, language} = dialog.querySelector('form').elements;
     code.value = entry?.code || '';
-    code.addEventListener('invalid', () => selectTab(0));
+    const toast = dialog.querySelector('.toast');
+    let hideToast;
+    function validateCode() {
+      if (code.value.trim()) return true;
+      selectTab(0);
+      code.focus();
+      toast.textContent = '请填写数据结构代码';
+      toast.classList.add('show');
+      clearTimeout(hideToast);
+      hideToast = setTimeout(() => toast.classList.remove('show'), 2800);
+      return false;
+    }
     let blog = entry?.blog ?? null;
     const legacyNotes = entry?.notes || '';
     const summary = dialog.querySelector('[data-blog-summary]');
@@ -382,18 +405,16 @@
     highlightDraft();
 
     submitForm(dialog, async values => {
-      if (!code.value.trim()) {
-        selectTab(0);
-        throw new Error('请填写数据结构代码');
-      }
       const payload = {language: language.value, code: values.get('code')};
+      if (!entry) payload.request_id = requestId;
       if (blog !== null) payload.blog = blog;
       if (entry?.is_rejected) payload.action = 'resubmit';
       if (entry) payload.version = entry.updated_at;
-      await mutate(entryUrl(collection.id, entry?.id), entry ? 'PATCH' : 'POST', payload);
+      const result = await mutate(entryUrl(collection.id, entry?.id), entry ? 'PATCH' : 'POST', payload);
       showToast(entry?.is_rejected ? '已重新提交，团队成员可查看' : entry ? '已保存代码' : '代码已提交');
+      if (result.training_points > 0 && !entry?.training_archived) void loadDashboardSummary().catch(() => {});
       await reload();
-    });
+    }, validateCode);
   }
 
   async function loadManagement(expectedTeamId) {

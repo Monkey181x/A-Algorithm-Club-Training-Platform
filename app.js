@@ -1621,6 +1621,11 @@ function renderMemberRecent(items, append = false) {
   const list = $('#historyList');
   if (!append) list.innerHTML = '';
   for (const item of items) {
+    if (item.kind === 'data_structure') {
+      if (append && list.querySelector(`[data-member-structure="${item.id}"]`)) continue;
+      list.insertAdjacentHTML('beforeend', `<article class="history-item" data-member-structure="${item.id}"><div class="history-item-icon approved">✓</div><div class="member-recent-copy"><strong>数据结构 · ${escapeHtml(item.name)}</strong><small>${escapeHtml(item.semester_name)} · 第 ${Number(item.week)} 周 · ${escapeHtml(item.language)} · 更新于 ${escapeHtml(new Date(item.updated_at).toLocaleString('zh-CN'))}</small></div><span>有效提交 ${Number(item.training_submissions)} 次 · ${Number(item.training_points)} 分</span></article>`);
+      continue;
+    }
     const key = `history-${item.id}`;
     if (append && list.querySelector(`[data-member-submission="${item.id}"]`)) continue;
     const proof = item.parts.find(part=>part.kind==='proof');

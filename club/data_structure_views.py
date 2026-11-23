@@ -1,11 +1,17 @@
+from uuid import UUID
+
 from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.http import JsonResponse
 from django.utils import timezone
 
-from .models import DataStructureCollection, DataStructureImplementation, Team
-from .submission_content import CODE_LANGUAGES
-from .views import api_error, api_login_required, body, membership_for
+from .models import DataStructureCollection, DataStructureImplementation, Semester, Team
+from .services import refresh_totals
+from .submission_content import (
+    CODE_LANGUAGES, DATA_STRUCTURE_BLOG_POINTS, DATA_STRUCTURE_CODE_POINTS,
+    DATA_STRUCTURE_VALID_SUBMISSIONS, data_structure_points,
+)
+from .views import active_semester, api_error, api_login_required, body, membership_for
 
 
 def collection_data(item, count):
@@ -23,10 +29,34 @@ def implementation_data(item, membership, include_code=False):
         "language": item.language, "is_rejected": item.is_rejected, "updated_at": item.updated_at.isoformat(),
         "rejection_note": item.rejection_note,
         "is_mine": item.member_id == membership.pk,
+        "training_points": item.training_points if item.training_week_id else 0,
+        "training_submissions": DATA_STRUCTURE_VALID_SUBMISSIONS if item.training_week_id and item.training_points else 0,
     }
     if include_code:
-        data.update(code=item.code, notes=item.notes, blog=item.blog)
+        data.update(
+            code=item.code, notes=item.notes, blog=item.blog,
+            training_tracked=bool(item.training_week_id),
+            training_archived=bool(item.training_week_id and item.training_week.semester.archived_at),
+        )
     return data
+
+
+def current_training_week(team, now):
+    semester = active_semester(team)
+    if semester:
+        return semester.weeks.filter(is_closed=False, starts_at__lte=now, ends_at__gt=now).first()
+    return None
+
+
+def update_training_credit(item, semester):
+    # The semester lock keeps credit changes and weekly settlement consistent.
+    if not semester or semester.archived_at or not item.training_week_id:
+        return
+    points = 0 if item.is_rejected else data_structure_points(item.blog)
+    if item.training_points != points:
+        item.training_points = points
+        item.save(update_fields=["training_points"])
+        refresh_totals(semester)
 
 
 def collection_fields(data):
@@ -87,15 +117,22 @@ def collections(request, collection_id=None):
         item = items.filter(pk=collection_id).first()
         if item is None:
             return api_error("数据结构不存在", 404)
-        entries = list(item.implementations.filter(visible_implementations(scope, membership)).select_related("member"))
-        submitted_languages = item.implementations.filter(member_id=membership.pk).order_by().values_list("language", flat=True)
+        entries = item.implementations.filter(visible_implementations(scope, membership)).select_related("member").defer(
+            "code", "blog", "notes",
+        )
+        can_submit = bool(membership.pk and not request.user.is_superuser and item.is_open)
         return JsonResponse({
             "collection": collection_data(item, len(entries)),
             "implementations": [implementation_data(entry, membership) for entry in entries],
-            "submitted_languages": list(submitted_languages),
             "languages": CODE_LANGUAGES,
             "can_manage": membership.is_admin,
-            "can_submit": bool(membership.pk and not request.user.is_superuser and item.is_open),
+            "can_submit": can_submit,
+            "training_rules": {
+                "submissions": DATA_STRUCTURE_VALID_SUBMISSIONS,
+                "code_points": DATA_STRUCTURE_CODE_POINTS,
+                "blog_points": DATA_STRUCTURE_BLOG_POINTS,
+                "available": bool(can_submit and current_training_week(item.team, timezone.now())),
+            },
         })
     allowed = ("PATCH", "DELETE") if collection_id is not None else ("POST",)
     if request.method not in allowed:
@@ -200,7 +237,7 @@ def implementations(request, collection_id, implementation_id=None):
             return api_error("仅管理员可以查看全部提交", 403)
         item = DataStructureImplementation.objects.filter(
             collection__in=items, collection_id=collection_id, pk=implementation_id,
-        ).filter(visible_implementations(scope, membership)).select_related("member").first()
+        ).filter(visible_implementations(scope, membership)).select_related("member", "training_week__semester").first()
         if item is None:
             return api_error("代码实现不存在", 404)
         return JsonResponse(implementation_data(item, membership, include_code=True))
@@ -209,8 +246,25 @@ def implementations(request, collection_id, implementation_id=None):
     if request.method not in allowed:
         return api_error("不支持该请求方法", 405)
     data = body(request)
+    request_id = None
+    if implementation_id is None and "request_id" in data:
+        try:
+            request_id = UUID(str(data["request_id"]))
+        except ValueError:
+            return api_error("提交请求编号无效")
+    received_at = timezone.now()
+    week = None
+    if implementation_id is not None:
+        semester_id = DataStructureImplementation.objects.filter(
+            collection__in=items, collection_id=collection_id, pk=implementation_id,
+        ).order_by().values_list("training_week__semester_id", flat=True).first()
+    else:
+        if membership.pk and not request.user.is_superuser:
+            week = current_training_week(membership.team, received_at)
+        semester_id = week.semester_id if week else None
     with transaction.atomic():
-        # Serialize submissions with collection updates and deletion.
+        semester = Semester.objects.select_for_update().filter(pk=semester_id).first() if semester_id else None
+        # Lock the semester first, then serialize against collection updates and deletion.
         collection = items.select_for_update().filter(pk=collection_id).first()
         if collection is None:
             return api_error("数据结构不存在", 404)
@@ -235,11 +289,22 @@ def implementations(request, collection_id, implementation_id=None):
                 item.is_rejected = True
                 item.rejection_note = note.strip()
                 item.save(update_fields=["is_rejected", "rejection_note", "updated_at"])
+                update_training_credit(item, semester)
                 return JsonResponse(implementation_data(item, membership))
             if item.is_rejected != (action == "resubmit"):
                 return api_error("提交状态已变化，请刷新后重试", 409)
         if not membership.pk or request.user.is_superuser:
             return api_error("请以团队成员身份提交代码", 403)
+        if request_id:
+            previous = collection.implementations.filter(member=membership, request_id=request_id).first()
+            if previous:
+                blog = data.get("blog", "")
+                if (data.get("language") != previous.language or data.get("code") != previous.code
+                        or not isinstance(blog, str) or blog.strip() != (previous.blog or "")
+                        or not isinstance(data.get("notes", ""), str)
+                        or data.get("notes", "").strip() != previous.notes):
+                    return api_error("这次提交已保存，请打开已有记录查看或编辑", 409)
+                return JsonResponse(implementation_data(previous, membership))
         if not collection.is_open:
             return api_error("该数据结构已关闭提交", 409)
         language = item.language if item else data.get("language")
@@ -257,11 +322,19 @@ def implementations(request, collection_id, implementation_id=None):
                 return api_error("Blog 最多 100000 字")
             blog = blog.strip()
         if item is None:
-            if collection.implementations.filter(member=membership, language=language).exists():
-                return api_error("你已提交该语言的实现，请打开已有实现编辑", 409)
+            record_date = timezone.localdate(received_at)
+            if (semester and not semester.archived_at and semester.is_active
+                    and semester.starts_on <= record_date <= semester.ends_on):
+                week = semester.weeks.filter(
+                    pk=week.pk, is_closed=False, starts_at__lte=received_at, ends_at__gt=received_at,
+                ).first()
+            else:
+                week = None
             item = collection.implementations.create(
                 member=membership, language=language, code=code, notes=notes.strip(), blog=blog,
+                training_week=week, training_date=record_date if week else None, request_id=request_id,
             )
+            update_training_credit(item, semester)
             return JsonResponse(implementation_data(item, membership), status=201)
         item.code = code
         item.notes = notes.strip()
@@ -269,4 +342,5 @@ def implementations(request, collection_id, implementation_id=None):
         item.is_rejected = False
         item.rejection_note = ""
         item.save(update_fields=["code", "notes", "blog", "is_rejected", "rejection_note", "updated_at"])
+        update_training_credit(item, semester)
         return JsonResponse(implementation_data(item, membership))
