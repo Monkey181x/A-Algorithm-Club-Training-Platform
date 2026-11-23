@@ -16,6 +16,7 @@ document.querySelector('#adminView').innerHTML = `
     <h3>洛谷提交记录查询</h3><form id="wbLuoguQueryForm" class="workbench-form"><label>全站查询 Cookie<input name="cookie" type="password" autocomplete="new-password" maxlength="8192" placeholder="_uid=…; __client_id=…"><small id="wbLuoguCookieHint"></small></label><label class="workbench-check"><input name="clear_cookie" type="checkbox">清除查询 Cookie</label><div><button class="primary-button" type="submit">保存查询配置</button></div></form><p class="muted">统一用于查询成员的公开提交时间，加密保存；受隐私保护的记录不保证可查询。成员无需填写 Cookie。</p>
   </section>
   <section class="panel workbench-panel" id="wbPendingSection" hidden><div class="panel-heading"><div><p class="section-label">TITLE INBOX</p><h2>待处理题目名称</h2></div></div><div id="wbProblemQueue"></div><button class="secondary-button" id="wbProblemsMore" hidden>加载更多题目</button></section>
+  <section class="panel workbench-panel" id="wbDataStructuresSection" hidden><div class="panel-heading"><h2>数据结构管理</h2><div class="data-structure-actions"><button type="button" class="secondary-button" id="wbOrderDataStructures" hidden>调整顺序</button><button type="button" class="primary-button" id="wbAddDataStructure">新增数据结构</button></div></div><div id="wbDataStructureList"></div></section>
   <section class="panel workbench-panel" id="wbReportsSection"><div class="panel-heading"><div><p class="section-label">REPORTS</p><h2>举报处理</h2></div><span class="muted" id="wbReportScope"></span></div><div id="reviewList" class="solution-waterfall"></div><button id="reportsMore" class="secondary-button" hidden>加载更多举报</button></section>
   <section class="panel workbench-panel" id="wbTeamsSection" hidden><div class="panel-heading"><div><p class="section-label">TEAMS</p><h2>团队配置</h2></div></div>
 <details id="wbCreateSection" class="workbench-details" hidden><summary>创建团队 ＋</summary><form id="wbCreateTeamForm" class="workbench-form"><label>团队名称<input name="team_name" maxlength="80" required></label><label>团队码<input name="team_code" maxlength="32" required></label><p class="muted">学期每年于 2 月 15 日、8 月 1 日自动切换，周次从学期起始周计算。</p><label>每周提交要求<input name="min_submissions" type="number" min="0" max="100000" value="4" required></label><label>每周积分要求<input name="min_score" type="number" min="0" max="100000" value="10" required></label><label>截图积分<input name="screenshot_points" type="number" min="0" max="10000" value="1" required></label><label>题解积分<input name="logic_points" type="number" min="0" max="10000" value="1" required></label><label>Blog积分<input name="blog_points" type="number" min="0" max="10000" value="1" required></label><label class="workbench-check"><input name="require_both" type="checkbox" checked>提交次数和积分均需达标</label><div class="workbench-form-actions"><button class="primary-button" type="submit">创建团队</button></div></form></details>
@@ -29,6 +30,7 @@ function initWorkbench(me) {
   workbench$('#workbenchDescription').textContent = me.site_admin ? '管理题目解析、举报与团队配置。' : '处理当前管理团队的举报与题名。';
   ['wbAccountsSection','wbCosmeticsSection','wbParserSection','wbCreateSection','wbTeamsSection','wbUpdateBackupSection','wbPasswordSection'].forEach(id => { workbench$('#'+id).hidden = !me.site_admin; });
   if (!me.can_manage_current) workbench$('#wbPendingSection').hidden = true;
+  workbench$('#wbDataStructuresSection').hidden = !me.can_manage_current || !me.team;
   workbench$('#wbManagedScope').hidden = me.site_admin || !me.is_team_manager;
   if (me.is_team_manager && !me.site_admin) {
     workbench$('#wbManagedTeam').innerHTML = (!me.can_manage_current ? '<option value="">请选择所管理的团队</option>' : '') + me.managed_teams.map(t => `<option value="${t.team_id}">${escapeHtml(t.team__name)}</option>`).join('');
@@ -52,6 +54,7 @@ async function loadWorkbench() {
       return;
     }
     const tasks = [loadAdminQueue(), loadPendingProblems(1, version), loadDispatchInbox()];
+    if (me.team) tasks.push(window.DataStructures.loadManagement(me.team.id));
     if (me.site_admin) tasks.push(loadWorkbenchTeams(version), loadParserConfig(version), loadSystemBackups(), loadSiteUpdates());
     const results = await Promise.allSettled(tasks);
     for (const result of results) if (result.status === 'rejected') showToast(result.reason.message || '工作台加载失败');
@@ -422,6 +425,7 @@ async function loadDispatchInbox(){
     ['wbAccountsSection','全局账号','<circle cx="12" cy="8" r="4"/><path d="M4 21v-3a8 8 0 0116 0v3"/>'],
     ['wbCosmeticsSection','装扮管理','<path d="M12 3l9 9-9 9-9-9zM8 12h8M12 8v8"/>'],
     ['wbDispatchSection', '商品派发', '<path d="M3 7h18v14H3zM3 7l9-5 9 5M12 2v19"/>'],
+    ['wbDataStructuresSection', '数据结构管理', '<rect x="9" y="3" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-4h14v4"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/>'],
     ['wbReportsSection', '举报处理', '<path d="M12 3l9 4v5c0 5-9 9-9 9s-9-4-9-9V7zM12 8v5M12 16h.01"/>'],
     ['wbPendingSection', '题名待办', '<path d="M4 5h16v14H4zM8 9h8M8 13h5"/>'],
     ['wbTeamsSection', '团队配置', '<circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0112 0v3M17 5a3 3 0 010 6M21 21v-3a6 6 0 00-4-5"/>'],

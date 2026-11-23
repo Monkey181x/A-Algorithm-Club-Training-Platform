@@ -1,7 +1,7 @@
 from . import cosmetic_views, cosmetic_admin
 from django.urls import path
 from . import poker_views
-from . import extension_views
+from . import data_structure_views, extension_views
 from . import account_views, admin_submission_views
 from . import member_management
 from . import notification_views
@@ -21,6 +21,11 @@ from . import shop_fulfillment
 from . import app_views
 
 urlpatterns = [
+    path("data-structures", data_structure_views.collections),
+    path("data-structures/order", data_structure_views.reorder_collections),
+    path("data-structures/<int:collection_id>", data_structure_views.collections),
+    path("data-structures/<int:collection_id>/implementations", data_structure_views.implementations),
+    path("data-structures/<int:collection_id>/implementations/<int:implementation_id>", data_structure_views.implementations),
     path('poker/rooms', poker_views.rooms),
     path('poker/rooms/<uuid:room_id>', poker_views.room),
 

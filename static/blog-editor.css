@@ -214,7 +214,7 @@
 }
 
 /* 编辑区域 */
-#blogMarkdownInput {
+.blog-markdown-input {
   width: 100%;
   flex: 1;
   border: none;
@@ -227,11 +227,11 @@
   background: #fff;
 }
 
-#blogMarkdownInput:focus {
+.blog-markdown-input:focus {
   outline: none;
 }
 
-#blogMarkdownInput::placeholder {
+.blog-markdown-input::placeholder {
   color: #9aa6a4;
 }
 
@@ -417,7 +417,7 @@
     font-size: 11px;
   }
 
-  #blogMarkdownInput,
+  .blog-markdown-input,
   .blog-preview {
     padding: 16px;
     font-size: 13px;

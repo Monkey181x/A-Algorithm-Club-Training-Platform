@@ -105,7 +105,8 @@ def member_profile(request, member_id):
     """Read-only same-team profile, using saved public platform snapshots."""
     from django.core.paginator import Paginator, InvalidPage
     from .models import Submission, SubmissionPart
-    from .views import serialize_submission
+    from django.db.models import F, Value
+    from .views import credited_structure_rows, serialize_submission, structure_history_items
     from .grades import grade_on, GRADES
     viewer = membership_for(request)
     if not viewer:
@@ -127,23 +128,34 @@ def member_profile(request, member_id):
         for b in target.user.platform_bindings.filter(platform__in=PLATFORMS)]
     query = Submission.objects.filter(member=target,team=viewer.team,is_valid=True,
         semester__archived_at__isnull=True).select_related('week','semester','problem','member').prefetch_related('parts').order_by('-submitted_at','-pk')
+    structures = credited_structure_rows(target)
+    def timeline(source, date_field, kind):
+        return (source.order_by().annotate(event_time=F(date_field), kind=Value(kind))
+                .values_list("pk", "event_time", "kind"))
+    events = timeline(query, "submitted_at", "daily").union(
+        timeline(structures, "updated_at", "data_structure"), all=True,
+    ).order_by("-event_time", "-pk", "kind")
     try:
-        page = Paginator(query,20).page(request.GET.get('page','1'))
+        page = Paginator(events,20).page(request.GET.get('page','1'))
     except InvalidPage:
         return api_error('提交页码无效')
-    records = []
-    for submission in page:
+    keys = [(kind, pk) for pk, _, kind in page]
+    daily_ids = [pk for kind, pk in keys if kind == "daily"]
+    structure_ids = [pk for kind, pk in keys if kind == "data_structure"]
+    records = {("data_structure", item["id"]): item for item in
+               structure_history_items(structures.filter(pk__in=structure_ids))}
+    for submission in query.filter(pk__in=daily_ids):
         record = serialize_submission(submission,parts=[p for p in submission.parts.all() if p.status==SubmissionPart.APPROVED])
         for key in ('can_edit','can_delete','can_resubmit'):
             record[key] = False
         record['rejection_note'] = ''
         for part in record['parts']:
             part['note'] = ''
-        records.append(record)
+        records[("daily", submission.pk)] = record
     response = JsonResponse({'member':{'id':target.pk,'name':target.display_name,'role':target.role,'title':title_data(target),'titles':titles_data(target),'badge':badge_data(target),'avatar_frame':frame_data(target),'cohort':cohort_data(personal),
         'grade_label':GRADES[grade] if grade is not None else '',
         'avatar':avatar_images.url_for(personal,target.pk,'small')},
-        'platforms':PLATFORMS,'bindings':bindings,'submissions':records,
+        'platforms':PLATFORMS,'bindings':bindings,'submissions':[records[key] for key in keys if key in records],
         'next_page':page.next_page_number() if page.has_next() else None,'total':page.paginator.count})
     response['Cache-Control'] = 'private, no-store'
     return response

@@ -6,7 +6,8 @@ from django.core.files.storage import default_storage
 from django.db import models, transaction
 from django.utils import timezone
 
-from .models import CleanupJob, ReviewLog, Semester, SemesterMemberTotal, Submission, SubmissionPart, TeamMembership, Week
+from .models import CleanupJob, DataStructureImplementation, ReviewLog, Semester, SemesterMemberTotal, Submission, SubmissionPart, TeamMembership, Week
+from .submission_content import DATA_STRUCTURE_VALID_SUBMISSIONS
 
 
 def score_part(part):
@@ -17,7 +18,7 @@ def score_part(part):
 
 
 def progress_rows(semester, week=None, member_ids=None, submission_ids=None, *, by_week=False):
-    """Approved scores and proof counts keyed by member, or (week, member)."""
+    """Training scores and effective counts keyed by member, or (week, member)."""
     submissions = Submission.objects.filter(semester=semester, is_valid=True)
     if week is not None:
         submissions = submissions.filter(week=week)
@@ -28,13 +29,32 @@ def progress_rows(semester, week=None, member_ids=None, submission_ids=None, *, 
     fields = ['week_id', 'member_id'] if by_week else ['member_id']
     score_fields = ['submission__' + field for field in fields]
     score_rows = (SubmissionPart.objects.filter(submission__in=submissions, status=SubmissionPart.APPROVED)
-                  .order_by().values(*score_fields).annotate(total=models.Sum('points_awarded'))
-                  .values_list(*score_fields, 'total'))
+                  .order_by().values(*score_fields).annotate(total=models.Sum('points_awarded'), equivalents=models.Value(0))
+                  .values_list(*score_fields, 'total', 'equivalents'))
     count_rows = (submissions.filter(parts__kind=SubmissionPart.PROOF, parts__status=SubmissionPart.APPROVED)
                   .order_by().values(*fields).annotate(total=models.Count('id', distinct=True))
                   .values_list(*fields, 'total'))
-    scores = {(row[:-1] if by_week else row[0]): row[-1] for row in score_rows}
+    if submission_ids is None:
+        implementations = DataStructureImplementation.objects.filter(
+            training_week__semester=semester, training_points__gt=0, member_id__isnull=False,
+        )
+        if week is not None:
+            implementations = implementations.filter(training_week=week)
+        if member_ids is not None:
+            implementations = implementations.filter(member_id__in=member_ids)
+        credit_fields = ["training_week_id", "member_id"] if by_week else ["member_id"]
+        credits = (implementations.order_by().values(*credit_fields).annotate(
+            total=models.Sum("training_points"), equivalents=models.Count("id") * DATA_STRUCTURE_VALID_SUBMISSIONS,
+        ).values_list(*credit_fields, "total", "equivalents"))
+        score_rows = score_rows.union(credits, all=True)
+
     counts = {(row[:-1] if by_week else row[0]): row[-1] for row in count_rows}
+    scores = {}
+    for row in score_rows:
+        key = row[:-2] if by_week else row[0]
+        scores[key] = scores.get(key, 0) + row[-2]
+        if row[-1]:
+            counts[key] = counts.get(key, 0) + row[-1]
     return scores, counts
 
 

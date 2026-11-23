@@ -46,7 +46,7 @@ function rankingSelection(target) {
     period: panel?.querySelector('[data-solved-period]')?.value || 'semester', panel};
 }
 
-const pageTitles = {settings:'设置',extensions:'拓展', dashboard:'总览', submissions:'我的提交', leaderboard:'排行榜', showcase:'团队提交', members:'成员列表', contests:'赛事中心', admin:'管理工作台', rbcshop:'RBC商店'};
+const pageTitles = {settings:'设置',extensions:'拓展', dashboard:'总览', submissions:'我的提交', leaderboard:'排行榜', showcase:'团队提交', dataStructures:'数据结构', members:'成员列表', contests:'赛事中心', admin:'管理工作台', rbcshop:'RBC商店'};
 const $ = (selector, root=document) => root.querySelector(selector);
 const $$ = (selector, root=document) => [...root.querySelectorAll(selector)];
 let canManage = false;
@@ -344,6 +344,7 @@ function setView(view, {preserveContent=false}={}) {
   window.contestSchedule?.activate(view === 'contests');
   if (previousView === 'extensions' && view !== 'extensions') window.PokerModule?.close();
   if (view === 'extensions') window.ExtensionResources.load();
+  if (view === 'dataStructures' && !preserveContent) window.DataStructures.load();
 }
 
 function updateSubmissionEntry(entry, day, date) {
@@ -660,6 +661,19 @@ function syncSegmented(group, selected = $('.segment.active', group)) {
   group.style.setProperty('--segment-height', `${selected.offsetHeight}px`);
 }
 
+function bindSegmentedKeyboard(group) {
+  group.addEventListener('keydown', event => {
+    const button = event.target.closest('.segment');
+    if (!button || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const items = $$('.segment', group);
+    const current = items.indexOf(button);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+    items[next]?.click();
+  });
+}
+
 function initSegmentedControls() {
   const rankingResize = new ResizeObserver(entries => {
     const groups = new Set(entries.map(entry => entry.target.closest('.segmented--ranking')));
@@ -672,17 +686,7 @@ function initSegmentedControls() {
       rankingResize.observe(group);
       $$('.segment', group).forEach(button => rankingResize.observe(button));
     }
-    $$('.segment', group).forEach((button, index) => {
-      button.addEventListener('keydown', (event) => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault();
-        const items = $$('.segment', group);
-        const current = items.indexOf(button);
-        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length;
-        items[next]?.focus();
-        items[next]?.click();
-      });
-    });
+    bindSegmentedKeyboard(group);
   });
   window.addEventListener('resize', () => $$('.segmented').forEach((group) => syncSegmented(group)));
 }
@@ -1617,6 +1621,11 @@ function renderMemberRecent(items, append = false) {
   const list = $('#historyList');
   if (!append) list.innerHTML = '';
   for (const item of items) {
+    if (item.kind === 'data_structure') {
+      if (append && list.querySelector(`[data-member-structure="${item.id}"]`)) continue;
+      list.insertAdjacentHTML('beforeend', `<article class="history-item" data-member-structure="${item.id}"><div class="history-item-icon approved">✓</div><div class="member-recent-copy"><strong>数据结构 · ${escapeHtml(item.name)}</strong><small>${escapeHtml(item.semester_name)} · 第 ${Number(item.week)} 周 · ${escapeHtml(item.language)} · 更新于 ${escapeHtml(new Date(item.updated_at).toLocaleString('zh-CN'))}</small></div><span>有效提交 ${Number(item.training_submissions)} 次 · ${Number(item.training_points)} 分</span></article>`);
+      continue;
+    }
     const key = `history-${item.id}`;
     if (append && list.querySelector(`[data-member-submission="${item.id}"]`)) continue;
     const proof = item.parts.find(part=>part.kind==='proof');

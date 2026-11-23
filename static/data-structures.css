@@ -1,0 +1,309 @@
+.data-structure-list {
+  display: grid;
+  gap: 10px;
+}
+
+.data-structure-item {
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px;
+  text-align: left;
+}
+
+.data-structure-item:focus-visible {
+  outline: 2px solid var(--site-accent, var(--teal));
+  outline-offset: 2px;
+}
+
+.data-structure-panel {
+  margin: 14px 0;
+  padding: 16px;
+}
+
+.data-structure-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.data-structure-dialog {
+  width: min(760px, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: clamp(14px, 4vw, 24px);
+  border: 1px solid var(--site-border, var(--line));
+  border-radius: var(--site-inner-radius, 14px);
+  background: var(--site-surface, var(--panel));
+  color: var(--site-text, var(--ink));
+}
+
+.data-structure-dialog::backdrop {
+  background: rgb(13 22 35 / 60%);
+}
+
+.data-structure-dialog h2 {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+
+.data-structure-dialog pre {
+  overflow: auto;
+  padding: 12px;
+  margin: 0;
+  border-radius: var(--site-inner-radius, 10px);
+  background: var(--site-fill, var(--canvas));
+  tab-size: 4;
+}
+
+.data-structure-dialog .code-block-shell {
+  margin-block: 14px;
+}
+
+.data-structure-form {
+  display: grid;
+  gap: 12px;
+}
+
+.data-structure-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.data-structure-form input:not([type="checkbox"]),
+.data-structure-form select,
+.data-structure-form textarea,
+.data-structure-form fieldset {
+  min-width: 0;
+  border: 1px solid var(--site-border, var(--line));
+  padding: 8px 10px;
+  border-radius: var(--site-inner-radius, 8px);
+  color: inherit;
+  background: var(--site-fill, var(--canvas));
+}
+
+.data-structure-languages,
+.data-structure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.data-structure-actions {
+  justify-content: flex-end;
+}
+
+.data-structure-languages label,
+.data-structure-form .workbench-check {
+  display: flex;
+  align-items: center;
+}
+
+.data-structure-error {
+  color: var(--site-error, #bd4545);
+  margin: 0;
+}
+
+.data-structure-error:empty {
+  display: none;
+}
+
+.data-structure-editor {
+  display: block;
+  position: relative;
+  height: clamp(160px, 34vh, 320px);
+}
+
+.data-structure-editor pre,
+.data-structure-editor textarea {
+  box-sizing: border-box;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--site-border, var(--line));
+  font: 13px/1.55 Consolas, monospace;
+  tab-size: 4;
+  white-space: pre;
+}
+
+.data-structure-editor pre {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.data-structure-editor code {
+  font: inherit;
+}
+
+html body .data-structure-editor textarea {
+  resize: none;
+  overflow: auto;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--site-text, var(--ink));
+  background: transparent !important;
+}
+
+.data-structure-dialog .data-structure-editor textarea:focus {
+  outline: none;
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--site-accent, var(--teal)) 20%, var(--site-border, var(--line)));
+}
+
+.data-structure-dialog .material-requirement {
+  margin-left: 5px;
+  font-size: .7em;
+  font-weight: 500;
+}
+
+.data-structure-dialog .code-language-label {
+  margin-bottom: 8px;
+}
+
+html body .data-structure-editor textarea::placeholder {
+  -webkit-text-fill-color: var(--site-secondary, var(--muted));
+}
+
+.data-structure-blog-pane {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin-bottom: 14px;
+}
+
+#dataStructureBlogEditor {
+  transform: none;
+  padding: 0;
+  color: var(--site-text, var(--ink));
+}
+
+#dataStructureBlogEditor:not([open]) {
+  display: none;
+}
+
+#dataStructureBlogEditor::backdrop {
+  background: var(--site-overlay-dim, rgb(13 22 35 / 60%));
+}
+
+#dataStructureBlogEditor .data-structure-error {
+  padding: 8px 12px;
+}
+
+.data-structure-item[data-collection-id] {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+}
+
+.data-structure-item-label {
+  display: grid;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+
+.data-structure-submission-status {
+  padding: 4px 8px;
+  border-radius: var(--site-inner-radius, 8px);
+  background: var(--site-fill, var(--canvas));
+  color: var(--site-secondary, var(--muted));
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.data-structure-submission-status[data-status="submitted"] {
+  background: color-mix(in srgb, var(--site-accent, var(--teal)) 12%, var(--site-fill, var(--canvas)));
+  color: var(--site-accent, var(--teal-dark));
+}
+
+.data-structure-submission-status[data-status="rejected"] {
+  color: var(--site-error, #bd4545);
+}
+
+.data-structure-order-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-inline-start: 24px;
+}
+
+.data-structure-order-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--site-border, var(--line));
+}
+
+.data-structure-order-item strong {
+  overflow-wrap: anywhere;
+}
+
+.data-structure-implementation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+@media (min-width: 760px) {
+  .data-structure-implementation-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  }
+}
+
+.data-structure-implementation-card {
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.data-structure-author {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.data-structure-implementation-card .leader-avatar {
+  flex: none;
+}
+
+.data-structure-implementation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.data-structure-implementation-actions span {
+  font-size: 12px;
+}
+
+.data-structure-implementation-actions .score {
+  display: inline;
+}
+
+.data-structure-implementation-actions button {
+  margin-inline-start: auto;
+}
+
+.data-structure-rejected {
+  color: var(--site-error, #bd4545);
+}
+
+.data-structure-implementation-grid > .queue-empty {
+  grid-column: 1 / -1;
+}
+
+.data-structure-detail-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.data-structure-detail-toolbar .data-structure-scope-switch {
+  width: max-content;
+  max-width: 100%;
+  margin: 0;
+}
+
+html[data-site-theme-active="true"] .data-structure-scope-switch .segment[aria-selected="false"] {
+  color: var(--site-secondary);
+}
