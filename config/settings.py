@@ -120,6 +120,7 @@ CELERY_BEAT_SCHEDULE = {
     'contest-check-nightly': {'task':'club.tasks.check_contests_nightly','schedule':crontab(hour=4, minute=0)},
     'contest-check-recovery': {'task':'club.tasks.check_contests_nightly','schedule':300.0},
     'poker-room-timeouts': {'task': 'club.tasks.sweep_poker_rooms', 'schedule': 15.0},
+    'legacy-poker-refunds': {'task': 'club.tasks.settle_legacy_poker_refunds', 'schedule': 60.0},
 
     'sync-bound-accounts-nightly': {'task': 'club.tasks.sync_bound_accounts_nightly',
                                   'schedule': crontab(hour=4, minute=0)},
