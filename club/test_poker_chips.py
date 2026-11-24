@@ -1,11 +1,16 @@
+from importlib import import_module
+from unittest.mock import patch
+
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
+from .poker_refunds import settle_pending_refunds
+
 
 class PaidPokerRefundMigrationTests(TransactionTestCase):
     old = [('club', '0073_user_qualification_reminder')]
-    new = [('club', '0074_remove_paid_poker')]
+    new = [('club', '0084_legacy_poker_refunds')]
 
     def migrate(self, targets):
         executor = MigrationExecutor(connection)
@@ -14,6 +19,23 @@ class PaidPokerRefundMigrationTests(TransactionTestCase):
 
     def setUp(self):
         self.addCleanup(self.migrate, self.new)
+
+    def test_site_that_applied_the_published_0074_keeps_its_existing_refund(self):
+        apps = self.migrate([('club', '0083_structure_training_date')])
+        chips = apps.get_model('club', 'PokerChipBalance')
+        user = apps.get_model('auth', 'User').objects.create(username='already-refunded')
+        chips.objects.create(user=user, balance=2000)
+        original = import_module('club.migrations.0074_remove_paid_poker')
+        with connection.schema_editor() as editor:
+            original.refund_and_delete_paid_poker(apps, editor)
+            editor.delete_model(chips)
+
+        current = self.migrate(self.new)
+        settle_pending_refunds()
+        self.assertEqual(current.get_model('club', 'CurrencyBalance').objects.get(user_id=user.pk).balance, 2)
+        self.assertEqual(list(current.get_model('club', 'CurrencyTransaction').objects.values_list('amount', flat=True)), [2])
+        self.assertFalse(current.get_model('club', 'LegacyPokerRefund').objects.exists())
+        self.assertFalse(chips.objects.exists())
 
     def test_refunds_combined_balances_once_and_keeps_free_rooms(self):
         old = self.migrate(self.old)
@@ -45,8 +67,19 @@ class PaidPokerRefundMigrationTests(TransactionTestCase):
         practice = Room.objects.create(team=team, created_by=second, mode='practice', name='Solo')
 
         current = self.migrate(self.new)
-        self.migrate(self.new)
         wallets = current.get_model('club', 'CurrencyBalance').objects
+        receipts = current.get_model('club', 'LegacyPokerRefund').objects
+        self.assertEqual(dict(wallets.values_list('user_id', 'balance')), {first.pk: 4})
+        self.assertEqual(dict(receipts.values_list('user_id', 'coins')), {first.pk: 2, second.pk: 0, fourth.pk: 1})
+        self.assertEqual(Chips.objects.count(), 2)
+        self.assertEqual(Room.objects.filter(mode='coins').count(), 2)
+        with patch('club.poker_refunds.CurrencyTransaction.objects.create', side_effect=RuntimeError('interrupted')):
+            with self.assertRaisesMessage(RuntimeError, 'interrupted'):
+                settle_pending_refunds()
+        self.assertEqual(wallets.get(user_id=first.pk).balance, 4)
+        self.assertTrue(receipts.filter(user_id=first.pk, settled_at__isnull=True).exists())
+        settle_pending_refunds()
+        settle_pending_refunds()
         self.assertEqual(dict(wallets.values_list('user_id', 'balance')), {first.pk: 6, fourth.pk: 1})
         refunds = current.get_model('club', 'CurrencyTransaction').objects.filter(transaction_type='poker_cashout')
         self.assertCountEqual(refunds.values_list('user_id', 'amount', 'balance_after'),
@@ -55,4 +88,5 @@ class PaidPokerRefundMigrationTests(TransactionTestCase):
                               [free.pk, practice.pk])
         self.assertEqual(list(current.get_model('club', 'PokerSeat').objects.values_list('pk', 'stack')),
                          [(free_seat.pk, 5000)])
-        self.assertNotIn(Chips._meta.db_table, connection.introspection.table_names())
+        self.assertFalse(Chips.objects.exists())
+        self.assertFalse(receipts.filter(settled_at__isnull=True).exists())

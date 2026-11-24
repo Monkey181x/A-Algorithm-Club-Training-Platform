@@ -951,6 +951,18 @@ class SubmissionTip(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class PokerChipBalance(models.Model):
+    # Retired chip wallets are consumed only by the legacy refund task.
+    user = models.OneToOneField(User, on_delete=models.PROTECT, related_name='poker_chips')
+    balance = models.PositiveBigIntegerField(default=0)
+
+
+class LegacyPokerRefund(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    coins = models.PositiveBigIntegerField()
+    settled_at = models.DateTimeField(null=True, db_index=True)
+
+
 class PokerRoom(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='poker_rooms')

@@ -16,7 +16,7 @@ PRACTICE_MODES = ('friendly', 'practice')
 
 def capacity():
     # Leaving players keep their place until the hand is actually settled.
-    players = PokerSeat.objects.filter(room__closed=False, user__isnull=False).count()
+    players = PokerSeat.objects.filter(room__closed=False, room__mode__in=PRACTICE_MODES, user__isnull=False).count()
     return {'players': players, 'limit': GLOBAL_PLAYER_LIMIT,
             'available': max(0, GLOBAL_PLAYER_LIMIT - players)}
 
@@ -158,7 +158,7 @@ def create_room(member, data):
         raise ValueError('请选择有效的游戏模式')
     if PokerSeat.objects.filter(user_id=member.user_id).exists():
         raise ValueError('请先离开当前牌桌')
-    if PokerRoom.objects.filter(team=team, closed=False).count() >= 20:
+    if PokerRoom.objects.filter(team=team, closed=False, mode__in=PRACTICE_MODES).count() >= 20:
         raise ValueError('房间数量已达上限，请加入现有房间')
     name = data.get('name', '')
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40:
