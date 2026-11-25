@@ -106,7 +106,7 @@ def member_profile(request, member_id):
     from django.core.paginator import Paginator, InvalidPage
     from .models import Submission, SubmissionPart
     from django.db.models import F, Value
-    from .views import credited_structure_rows, serialize_submission, structure_history_items
+    from .views import structure_history_rows, serialize_submission, structure_history_items
     from .grades import grade_on, GRADES
     viewer = membership_for(request)
     if not viewer:
@@ -128,7 +128,7 @@ def member_profile(request, member_id):
         for b in target.user.platform_bindings.filter(platform__in=PLATFORMS)]
     query = Submission.objects.filter(member=target,team=viewer.team,is_valid=True,
         semester__archived_at__isnull=True).select_related('week','semester','problem','member').prefetch_related('parts').order_by('-submitted_at','-pk')
-    structures = credited_structure_rows(target)
+    structures = structure_history_rows(target)
     def timeline(source, date_field, kind):
         return (source.order_by().annotate(event_time=F(date_field), kind=Value(kind))
                 .values_list("pk", "event_time", "kind"))
@@ -143,7 +143,7 @@ def member_profile(request, member_id):
     daily_ids = [pk for kind, pk in keys if kind == "daily"]
     structure_ids = [pk for kind, pk in keys if kind == "data_structure"]
     records = {("data_structure", item["id"]): item for item in
-               structure_history_items(structures.filter(pk__in=structure_ids))}
+               structure_history_items(structures.filter(pk__in=structure_ids), can_view=viewer.pk == target.pk)}
     for submission in query.filter(pk__in=daily_ids):
         record = serialize_submission(submission,parts=[p for p in submission.parts.all() if p.status==SubmissionPart.APPROVED])
         for key in ('can_edit','can_delete','can_resubmit'):

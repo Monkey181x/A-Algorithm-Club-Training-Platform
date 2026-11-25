@@ -27,7 +27,7 @@ from functools import wraps
 
 from .models import AccountClosure, DataStructureImplementation, FileDeletion, ReviewLog, Semester, SemesterMemberTotal, Submission, SubmissionPart, Team, TeamMembership, Week, create_internal_username
 from .services import build_weeks, progress_rows, qualified, refresh_totals, week_bounds, score_part
-from .submission_content import CODE_LANGUAGES, DATA_STRUCTURE_VALID_SUBMISSIONS, normalize_logic
+from .submission_content import CODE_LANGUAGES, normalize_logic
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -381,7 +381,8 @@ def me(request):
         'managed_teams': list(request.user.team_memberships.filter(role='admin', is_active=True).values('team_id', 'team__name', 'team__code')),
         'can_submit': bool(membership and membership.pk and not request.user.is_superuser),
         'group': '管理员' if request.user.is_superuser else '团队管理用户组' if request.user.team_memberships.filter(role='admin', is_active=True).exists() else '普通用户组',
-        'team': {'id': membership.team_id, 'name': membership.team.name, 'code': membership.team.code} if membership else None,
+        'team': {'id': membership.team_id, 'name': membership.team.name, 'code': membership.team.code,
+                 'data_structures_enabled': membership.team.data_structures_enabled} if membership else None,
         'teams': teams, 'cosmetics':cosmetic_state(request.user),'avatar_frame':frame_data(membership) if membership else None, 'csrfToken': get_token(request)})
 
 
@@ -521,21 +522,22 @@ def members(request):
     return JsonResponse({'members': rows, 'team_name': membership.team.name})
 
 
-def credited_structure_rows(member):
+def structure_history_rows(member):
     return DataStructureImplementation.objects.filter(
-        member=member, collection__team_id=member.team_id, training_points__gt=0,
-        training_week__isnull=False, training_week__semester__archived_at__isnull=True,
+        member=member, collection__team_id=member.team_id, is_rejected=False,
+        training_week__semester__archived_at__isnull=True,
     )
 
 
-def structure_history_items(query):
+def structure_history_items(query, *, can_view=False):
     return [{
         "kind": "data_structure", "id": pk, "name": name, "week": week, "semester_name": semester,
+        "collection_id": collection_id, "can_view": can_view,
         "language": CODE_LANGUAGES.get(language, language), "updated_at": updated,
-        "training_points": points, "training_submissions": DATA_STRUCTURE_VALID_SUBMISSIONS,
-    } for pk, name, week, semester, language, updated, points in query.values_list(
-        "pk", "collection__name", "training_week__number", "training_week__semester__name",
-        "language", "updated_at", "training_points",
+        "training_points": points, "training_submissions": submissions,
+    } for pk, collection_id, name, week, semester, language, updated, points, submissions in query.values_list(
+        "pk", "collection_id", "collection__name", "training_week__number", "training_week__semester__name",
+        "language", "updated_at", "training_points", "training_submissions",
     )]
 
 
@@ -574,10 +576,10 @@ def member_history(request, member_id):
     scores, counts = ({}, {})
     if semester and (not week_id or summary_week):
         scores, counts = progress_rows(semester, summary_week, [target.id])
-        structures = credited_structure_rows(target).filter(training_week__semester=semester)
+        structures = structure_history_rows(target).filter(training_week__semester=semester)
         if summary_week:
             structures = structures.filter(training_week=summary_week)
-        structure_items = structure_history_items(structures)
+        structure_items = structure_history_items(structures, can_view=viewer.pk == target.pk)
     summary_score = scores.get(target.id, 0)
     summary_submissions = counts.get(target.id, 0)
     summary_qualified = qualified(summary_score, summary_submissions, summary_week) if summary_week else None
@@ -915,11 +917,11 @@ def export_xlsx(request):
         collection__team=team, training_week__semester=semester, member__isnull=False,
     ).order_by("training_week__number", "member_id", "pk").values_list(
         "member__display_name", "collection__name", "language", "training_week__number",
-        "training_date", "is_rejected", "training_points",
+        "training_date", "is_rejected", "training_submissions", "training_points",
     )
-    for row_number, (name, structure, language, week, day, rejected, points) in enumerate(rows.iterator(), 2):
+    for row_number, (name, structure, language, week, day, rejected, submissions, points) in enumerate(rows.iterator(), 2):
         structures.append([name, structure, CODE_LANGUAGES.get(language, language), week, day or "日期未知",
-                           "已驳回" if rejected else "已提交", DATA_STRUCTURE_VALID_SUBMISSIONS if points else 0, points])
+                           "已驳回" if rejected else "已提交", submissions, points])
         for column in (1, 2, 3):
             structures.cell(row_number, column).data_type = 's'
     for column, width in enumerate([20, 28, 16, 12, 18, 12, 18, 12], 1):

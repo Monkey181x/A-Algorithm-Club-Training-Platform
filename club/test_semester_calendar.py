@@ -42,12 +42,19 @@ class SemesterCalendarTests(TestCase):
         self.assertEqual(term.weeks.filter(number=14).get().pk, week.pk)
 
     def test_rollover_is_idempotent_inherits_rules_and_closes_old_term(self):
-        term = Semester.objects.create(team=self.team, name='Autumn', starts_on=date(2026,8,1), ends_on=date(2027,2,14), calendar_managed=True, min_score=23, blog_points=5)
+        term = Semester.objects.create(
+            team=self.team, name='Autumn', starts_on=date(2026,8,1), ends_on=date(2027,2,14),
+            calendar_managed=True, min_score=23, blog_points=5, data_structure_valid_submissions=1,
+            data_structure_code_points=7, data_structure_blog_points=3,
+        )
         build_weeks(term)
         self.assertEqual(ensure_current_semester(self.team,date(2027,2,14)).pk,term.pk)
         current = ensure_current_semester(self.team,date(2027,2,15))
         self.assertEqual((current.starts_on,current.ends_on),(date(2027,2,15),date(2027,7,31)))
         self.assertEqual((current.min_score,current.blog_points),(23,5))
+        self.assertEqual((
+            current.data_structure_valid_submissions, current.data_structure_code_points, current.data_structure_blog_points,
+        ), (1, 7, 3))
         term.refresh_from_db()
         self.assertFalse(term.is_active)
         self.assertFalse(term.weeks.filter(is_closed=False).exists())

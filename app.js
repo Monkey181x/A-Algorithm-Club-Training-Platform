@@ -50,6 +50,7 @@ const pageTitles = {settings:'设置',extensions:'拓展', dashboard:'总览', s
 const $ = (selector, root=document) => root.querySelector(selector);
 const $$ = (selector, root=document) => [...root.querySelectorAll(selector)];
 let canManage = false;
+let dataStructuresEnabled = false;
 const demoMode = false;
 let countdownTimer = null;
 let countdownDeadline = 0;
@@ -309,6 +310,7 @@ function setView(view, {preserveContent=false}={}) {
   }
   if (view === 'rbcshop' && !window.CurrencyModule?.getCurrencyData().enabled) view = 'dashboard';
   if (view === 'admin' && !canManage) view = 'dashboard';
+  if (view === 'dataStructures' && !dataStructuresEnabled && !(canManage && preserveContent)) view = 'dashboard';
   if (view === currentView) return;
   const previousView = currentView;
   currentView = view;
@@ -1491,6 +1493,8 @@ async function loadLiveData() {
       return;
     }
     const me = await meResponse.json();
+    dataStructuresEnabled = me.team?.data_structures_enabled === true;
+    $('.nav-item[data-view="dataStructures"]').hidden = !dataStructuresEnabled;
     window.SpecialThemes?.sync(me.cosmetics);
     submissionDraftOwner = me.account && (me.test_target_team?.id || me.team?.id)
       ? [me.account, me.test_target_team?.id || me.team.id, !!me.test_mode] : null;
@@ -1623,7 +1627,8 @@ function renderMemberRecent(items, append = false) {
   for (const item of items) {
     if (item.kind === 'data_structure') {
       if (append && list.querySelector(`[data-member-structure="${item.id}"]`)) continue;
-      list.insertAdjacentHTML('beforeend', `<article class="history-item" data-member-structure="${item.id}"><div class="history-item-icon approved">✓</div><div class="member-recent-copy"><strong>数据结构 · ${escapeHtml(item.name)}</strong><small>${escapeHtml(item.semester_name)} · 第 ${Number(item.week)} 周 · ${escapeHtml(item.language)} · 更新于 ${escapeHtml(new Date(item.updated_at).toLocaleString('zh-CN'))}</small></div><span>有效提交 ${Number(item.training_submissions)} 次 · ${Number(item.training_points)} 分</span></article>`);
+      const term = item.week == null ? '未计入训练统计 · ' : `${escapeHtml(item.semester_name)} · 第 ${Number(item.week)} 周 · `;
+      list.insertAdjacentHTML('beforeend', `<article class="history-item" data-member-structure="${item.id}"><div class="history-item-icon approved">✓</div><div class="member-recent-copy"><strong>数据结构 · ${escapeHtml(item.name)}</strong><small>${term}${escapeHtml(item.language)} · 更新于 ${escapeHtml(new Date(item.updated_at).toLocaleString('zh-CN'))}</small></div><span>有效提交 ${Number(item.training_submissions)} 次 · ${Number(item.training_points)} 分</span>${item.can_view ? `<button class="history-view secondary-button" type="button" data-history-structure="${Number(item.id)}" data-collection="${Number(item.collection_id)}" data-language="${escapeHtml(item.language)}">查看内容</button>` : ''}</article>`);
       continue;
     }
     const key = `history-${item.id}`;
@@ -1685,9 +1690,18 @@ function closeMemberHistory() {
 }
 $('#closeHistory').addEventListener('click',closeMemberHistory);
 $('#memberRecentMore').addEventListener('click',()=>{ if(memberProfileNextPage&&!memberProfileBusy) openLiveMemberHistory(activeHistoryMemberId,memberProfileNextPage); });
-$('#historyList').addEventListener('click',event=>{ const button=event.target.closest('[data-review]'); if(button){closeMemberHistory();openReview(button.dataset.review,true);} });
+$('#historyList').addEventListener('click', event => {
+  const structure = event.target.closest('[data-history-structure]');
+  if (structure) {
+    const {collection, historyStructure, language} = structure.dataset;
+    void window.DataStructures.openHistoryImplementation(Number(collection), Number(historyStructure), language, structure);
+    return;
+  }
+  const button = event.target.closest('[data-review]');
+  if (button) { closeMemberHistory(); openReview(button.dataset.review, true); }
+});
 document.addEventListener('keydown',event=>{
-  if(!historyModal.classList.contains('open'))return;
+  if (!historyModal.classList.contains('open') || $('dialog.data-structure-dialog[open]')) return;
   if(event.key==='Escape'){event.preventDefault();closeMemberHistory();return;}
   if(event.key!=='Tab')return;
   const controls=[...historyModal.querySelectorAll('button:not(:disabled),a[href],summary')].filter(el=>el.getClientRects().length);

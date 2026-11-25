@@ -155,13 +155,35 @@ class WorkbenchTests(TestCase):
         endpoint=f'/api/management/teams/{self.team.pk}/settings'
         data=self.admin_client.get(endpoint).json()
         payload={'name':'Updated','code':self.team.code,'min_score':3,
-            'min_submissions':2,'screenshot_points':1,'logic_points':2,'blog_points':3,'require_both':False}
+            'min_submissions':2,'screenshot_points':1,'logic_points':2,'blog_points':3,'require_both':False,
+            'settings_version':data['settings_version']}
         self.assertEqual(self.admin_client.put(endpoint,json.dumps(payload),content_type='application/json').status_code,200)
         self.semester.refresh_from_db()
         self.assertEqual((self.semester.min_score,self.semester.logic_points),(3,2))
         self.assertIsNone(self.semester.cleanup_at)
         self.client.force_login(self.owner)
         self.assertEqual(self.client.get(endpoint).status_code,403)
+
+    def test_stale_team_settings_cannot_overwrite_new_rules(self):
+        endpoint = f'/api/management/teams/{self.team.pk}/settings'
+        settings = self.admin_client.get(endpoint).json()
+        form = {**settings['semester'], 'name': settings['name'], 'code': settings['code'],
+                'data_structures_enabled': settings['data_structures_enabled'],
+                'settings_version': settings['settings_version']}
+        other_tab = Client()
+        other_tab.force_login(self.root)
+        self.assertEqual(other_tab.get(endpoint).json()['settings_version'], form['settings_version'])
+        latest = self.admin_client.put(
+            endpoint, {**form, 'data_structures_enabled': False, 'data_structure_code_points': 7},
+            content_type='application/json',
+        )
+        self.assertEqual(latest.status_code, 200, latest.content)
+        stale = other_tab.put(endpoint, {**form, 'name': 'Other name'}, content_type='application/json')
+        self.assertEqual(stale.status_code, 409)
+        updated = other_tab.get(endpoint).json()
+        self.assertEqual(updated['name'], settings['name'])
+        self.assertFalse(updated['data_structures_enabled'])
+        self.assertEqual(updated['semester']['data_structure_code_points'], 7)
 
     def test_legacy_workbench_redirects_to_main_and_no_team_root_still_has_access(self):
         self.assertRedirects(self.admin_client.get('/manage.html'),'/?view=admin',fetch_redirect_response=False)

@@ -20,10 +20,9 @@ CODE_LANGUAGES = {
 DATA_STRUCTURE_VALID_SUBMISSIONS = 2
 DATA_STRUCTURE_CODE_POINTS = 2
 DATA_STRUCTURE_BLOG_POINTS = 2
-
-
-def data_structure_points(blog):
-    return DATA_STRUCTURE_CODE_POINTS + (DATA_STRUCTURE_BLOG_POINTS if (blog or "").strip() else 0)
+DATA_STRUCTURE_RULE_FIELDS = (
+    "data_structure_valid_submissions", "data_structure_code_points", "data_structure_blog_points",
+)
 
 
 # Display placeholders are never submitted solution content.
