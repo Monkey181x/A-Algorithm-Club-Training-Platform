@@ -254,18 +254,9 @@
     return `${endpoint}/${collectionId}/implementations${entryId ? `/${entryId}` : ''}`;
   }
 
-  async function openImplementation(data, id, button, scope, reload) {
-    const {collection, languages, can_submit: canSubmit, can_manage: canManage} = data;
-    const version = ++implementationVersion;
-    const collectionVersion = requestVersion;
-    button.disabled = true;
-    try {
-      const entry = await communityRequest(`${entryUrl(collection.id, id)}?scope=${scope}`);
-      if (version !== implementationVersion || collectionVersion !== requestVersion
-          || !root.closest('.page-view').classList.contains('active')) return;
-      const canEdit = scope !== 'manage' && entry.is_mine && canSubmit && collection.languages.includes(entry.language);
-      const dialog = openDialog(`
-        <h2>${escapeHtml(uiMemberName(entry.author))} · ${escapeHtml(languages[entry.language] || entry.language)}</h2>
+  function showImplementation(entry, language, {canEdit = false, canReject = false} = {}) {
+    const dialog = openDialog(`
+        <h2>${escapeHtml(uiMemberName(entry.author))} · ${escapeHtml(language)}</h2>
         ${entry.is_rejected ? `<p class="data-structure-notes"><strong>已驳回${entry.training_archived ? '' : ' · 不计分'}</strong> · ${entry.rejection_note ? escapeHtml(entry.rejection_note) : '旧记录未填写原因'}</p>` : ''}
         ${entry.training_tracked && (!entry.is_rejected || entry.training_archived)
           ? `<p class="muted">${entry.training_archived ? '归档时计入 · ' : ''}有效提交 ${Number(entry.training_submissions)} 次 · 积分 ${Number(entry.training_points)} 分</p>`
@@ -278,13 +269,29 @@
         <div class="data-structure-actions">
           <button type="button" class="secondary-button" data-close>关闭</button>
           ${canEdit ? `<button type="button" class="primary-button" data-edit>${entry.is_rejected ? '修改重交' : '编辑代码'}</button>` : ''}
-          ${scope === 'manage' && canManage && !entry.is_rejected ? '<button type="button" class="secondary-button" data-reject>驳回</button>' : ''}
+          ${canReject ? '<button type="button" class="secondary-button" data-reject>驳回</button>' : ''}
         </div>`);
-      bindMaterialTabs(dialog);
-      const code = dialog.querySelector('#structureDetailCodePane code');
-      code.textContent = entry.code;
-      decorateSubmissionCode(code, entry.language);
-      renderBlog(dialog.querySelector('#structureDetailBlogPane'), entry.blog, entry.notes);
+    bindMaterialTabs(dialog);
+    const code = dialog.querySelector('#structureDetailCodePane code');
+    code.textContent = entry.code;
+    decorateSubmissionCode(code, entry.language);
+    renderBlog(dialog.querySelector('#structureDetailBlogPane'), entry.blog, entry.notes);
+    return dialog;
+  }
+
+  async function openImplementation(data, id, button, scope, reload) {
+    const {collection, languages, can_submit: canSubmit, can_manage: canManage} = data;
+    const version = ++implementationVersion;
+    const collectionVersion = requestVersion;
+    button.disabled = true;
+    try {
+      const entry = await communityRequest(`${entryUrl(collection.id, id)}?scope=${scope}`);
+      if (version !== implementationVersion || collectionVersion !== requestVersion
+          || !root.closest('.page-view').classList.contains('active')) return;
+      const canEdit = scope !== 'manage' && entry.is_mine && canSubmit && collection.languages.includes(entry.language);
+      const dialog = showImplementation(entry, languages[entry.language] || entry.language, {
+        canEdit, canReject: scope === 'manage' && canManage && !entry.is_rejected,
+      });
       const edit = dialog.querySelector('[data-edit]');
       if (edit) edit.onclick = () => {
         dialog.close();
@@ -295,6 +302,19 @@
         dialog.close();
         rejectImplementation(collection.id, entry);
       };
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function openHistoryImplementation(collectionId, entryId, language, button) {
+    button.disabled = true;
+    try {
+      const entry = await communityRequest(`${entryUrl(collectionId, entryId)}?scope=history`);
+      if (!button.getClientRects().length) return;
+      showImplementation(entry, language).addEventListener('close', () => button.focus(), {once: true});
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -324,8 +344,9 @@
     });
   }
 
-  function editImplementation({collection, languages, training_rules: rules}, entry, available, reload) {
-    const countsForTraining = entry ? entry.training_tracked && !entry.training_archived : rules.available;
+  function editImplementation({collection, languages, training_rules: currentRules}, entry, available, reload) {
+    const rules = entry?.training_rules ?? currentRules;
+    const countsForTraining = entry ? entry.training_tracked && !entry.training_archived : currentRules.available;
     const requestId = entry ? null : window.clubApi.requestId();
     const label = entry?.is_rejected ? '修改重交' : entry ? '保存修改' : '提交';
     const dialog = openDialog(`
@@ -335,7 +356,7 @@
           ${materialTabs('structureEdit', true)}
           <div id="structureEditCodePane" role="tabpanel" aria-labelledby="structureEditCodeTab">
             <div class="field-label"><span>${countsForTraining
-              ? `必填 · ${Number(rules.code_points)} 分`
+              ? `必填 · 有效提交 ${Number(rules.submissions)} 次 · ${Number(rules.code_points)} 分`
               : entry?.training_archived ? '积分已随学期归档' : '本次不计入训练统计'}</span></div>
             <label class="code-language-label">代码语言 <select name="language" ${entry ? 'disabled' : ''}>
               ${available.map(language => `<option value="${escapeHtml(language)}">${escapeHtml(languages[language])}</option>`).join('')}
@@ -412,7 +433,10 @@
       if (entry) payload.version = entry.updated_at;
       const result = await mutate(entryUrl(collection.id, entry?.id), entry ? 'PATCH' : 'POST', payload);
       showToast(entry?.is_rejected ? '已重新提交，团队成员可查看' : entry ? '已保存代码' : '代码已提交');
-      if (result.training_points > 0 && !entry?.training_archived) void loadDashboardSummary().catch(() => {});
+      if (!entry?.training_archived && (result.training_points > 0 || result.training_submissions > 0
+          || entry?.training_points > 0 || entry?.training_submissions > 0)) {
+        void loadDashboardSummary().catch(() => {});
+      }
       await reload();
     }, validateCode);
   }
@@ -585,5 +609,5 @@
     }
   }
 
-  window.DataStructures = {load, loadManagement};
+  window.DataStructures = {load, loadManagement, openHistoryImplementation};
 })();

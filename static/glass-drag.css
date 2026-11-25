@@ -1,5 +1,6 @@
 .segmented,.segmented .segment{touch-action:pan-y;user-select:none;-webkit-user-select:none}
-.auth-tabs,.auth-tabs [data-auth-tab],.sidebar .nav-item{touch-action:pan-x;user-select:none;-webkit-user-select:none}
+.auth-tabs,.auth-tabs [data-auth-tab]{touch-action:pan-x;user-select:none;-webkit-user-select:none}
+.sidebar .nav-item{user-select:none;-webkit-user-select:none}
 .glass-dragging,.glass-dragging button{cursor:grabbing!important}
 .segmented .segment.active{background:transparent!important;box-shadow:none!important}
 .segmented .segment.active::after{display:none!important}

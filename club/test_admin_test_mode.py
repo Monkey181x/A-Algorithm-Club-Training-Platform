@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from . import test_community as fixtures
-from .models import Submission, Week, TeamMembership
+from .models import DataStructureCollection, DataStructureImplementation, Semester, Submission, Week, TeamMembership
 
 class AdminTestModeTests(TestCase):
     setUp = fixtures.CommunityTests.setUp
@@ -41,6 +41,63 @@ class AdminTestModeTests(TestCase):
         self.assertEqual(self.toggle(True).status_code,403)
         s=self.client.session;s['admin_test_user']=self.author.pk;s['admin_test_team']=self.team.pk;s.save()
         self.assertEqual(self.client.get('/api/me').status_code,403)
+
+    def test_structure_switch_rules_and_progress_follow_target_team_in_sandbox(self):
+        self.team.data_structures_enabled = False
+        self.team.save(update_fields=['data_structures_enabled'])
+        self.semester.data_structure_valid_submissions = 3
+        self.semester.data_structure_code_points = 7
+        self.semester.data_structure_blog_points = 4
+        self.semester.save(update_fields=[
+            'data_structure_valid_submissions', 'data_structure_code_points', 'data_structure_blog_points',
+        ])
+        project = DataStructureCollection.objects.create(team=self.team, name='并查集', languages=['python'])
+        self.enable()
+        me = self.client.get('/api/me').json()
+        sandbox_id = me['team']['id']
+        self.assertFalse(me['team']['data_structures_enabled'])
+        self.assertEqual(self.client.get('/api/data-structures').status_code, 403)
+        copied_project = DataStructureCollection.objects.get(team_id=sandbox_id, sandbox_source_id=project.pk)
+        self.assertNotEqual(copied_project.pk, project.pk)
+
+        self.team.data_structures_enabled = True
+        self.team.save(update_fields=['data_structures_enabled'])
+        project.name = '并查集新版'
+        project.save(update_fields=['name'])
+        selected = self.post_test_team()
+        self.assertEqual(selected.status_code, 200, selected.content)
+        self.assertTrue(self.client.get('/api/me').json()['team']['data_structures_enabled'])
+        settings = Semester.objects.get(team_id=sandbox_id, is_active=True)
+        self.assertEqual((settings.data_structure_valid_submissions, settings.data_structure_code_points,
+                          settings.data_structure_blog_points), (3, 7, 4))
+        detail_url = f'/api/data-structures/{copied_project.pk}'
+        preview = self.client.get(detail_url).json()
+        self.assertEqual(preview['collection']['name'], project.name)
+        self.assertEqual(preview['training_rules'], {'submissions':3, 'code_points':7, 'blog_points':4, 'available':True})
+        response = self.client.post(
+            detail_url + '/implementations', {'language':'python', 'code':'pass', 'blog':'说明'},
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        result = response.json()
+        self.assertEqual((result['training_submissions'], result['training_points']), (3, 11))
+        dashboard = self.client.get('/api/dashboard').json()
+        self.assertEqual((dashboard['submissions'], dashboard['score']), (3, 11))
+        member = TeamMembership.objects.get(team_id=sandbox_id)
+        history = self.client.get(f'/api/members/{member.pk}/history', {'week':self.week.number}).json()
+        self.assertEqual(history['summary']['score'], 11)
+        self.assertEqual(history['data_structure_submissions'][0]['id'], result['id'])
+        self.assertFalse(DataStructureImplementation.objects.filter(collection__team=self.team).exists())
+
+        project.deleted_at = timezone.now()
+        project.save(update_fields=['deleted_at'])
+        self.assertEqual(self.post_test_team().status_code, 200)
+        self.assertEqual(self.client.get(detail_url).status_code, 404)
+        history_url = f"{detail_url}/implementations/{result['id']}"
+        self.assertEqual(self.client.get(history_url, {'scope':'history'}).status_code, 200)
+
+    def post_test_team(self):
+        return self.client.post('/api/team/select', {'team_id':self.team.pk}, content_type='application/json')
     def test_enter_exit_and_reuse_preserve_admin_and_real_team(self):
         self.enable()
         me=self.client.get('/api/me').json()

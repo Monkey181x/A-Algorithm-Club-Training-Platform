@@ -3,7 +3,9 @@ import uuid
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.http import JsonResponse
-from .models import Team, TeamMembership, Semester
+from django.utils import timezone
+from .models import DataStructureCollection, Team, TeamMembership, Semester
+from .submission_content import DATA_STRUCTURE_RULE_FIELDS
 
 USER_KEY = 'admin_test_user'
 TEAM_KEY = 'admin_test_team'
@@ -92,6 +94,22 @@ def toggle(request):
     request.session.cycle_key()
     return JsonResponse({'ok':True,'test_mode':enabled})
 
+
+def copy_sandbox_structures(target, team):
+    fields = ('name', 'requirements', 'languages', 'is_open', 'position', 'deleted_at')
+    originals = target.data_structure_collections.filter(deleted_at__isnull=True).order_by()
+    copies = [
+        DataStructureCollection(team=team, sandbox_source_id=source['id'], **{field: source[field] for field in fields})
+        for source in originals.values('id', *fields)
+    ]
+    DataStructureCollection.objects.bulk_create(
+        copies, update_conflicts=True, unique_fields=['team', 'sandbox_source_id'], update_fields=fields,
+    )
+    team.data_structure_collections.filter(sandbox_source_id__isnull=False, deleted_at__isnull=True).exclude(
+        sandbox_source_id__in=[item.sandbox_source_id for item in copies],
+    ).update(is_open=False, deleted_at=timezone.now())
+
+
 @transaction.atomic
 def activate(request,admin,target_id):
     try: target=target_teams().filter(pk=int(target_id)).first()
@@ -103,18 +121,24 @@ def activate(request,admin,target_id):
         return JsonResponse({'error':'测试账号标识冲突'},status=409)
     team,_=Team.objects.get_or_create(code=sandbox_code(admin,target),defaults={'name':target.name+'（管理员私有测试）','created_by':admin})
     if team.created_by_id!=admin.pk: return JsonResponse({'error':'测试空间冲突'},status=409)
+    today = timezone.localdate()
+    semester, _ = sandbox_week(team, today)
+    # Submission updates lock the semester before the team and collection.
+    semester = Semester.objects.select_for_update().get(pk=semester.pk)
     team.name=(target.name+'（管理员私有测试）')[:80]
-    for field in ('currency_enabled','daily_checkin_reward','problem_rewards','reward_settings'): setattr(team,field,getattr(target,field))
-    team.save(update_fields=['name','currency_enabled','daily_checkin_reward','problem_rewards','reward_settings'])
+    team_fields = ('currency_enabled', 'daily_checkin_reward', 'problem_rewards', 'reward_settings', 'data_structures_enabled')
+    for field in team_fields:
+        setattr(team, field, getattr(target, field))
+    team.save(update_fields=['name', *team_fields])
     TeamMembership.objects.get_or_create(user=user,team=team,defaults={'display_name':'管理员测试用户'})
-    from django.utils import timezone
-    today=timezone.localdate()
-    semester,_=sandbox_week(team,today)
     source=target.semesters.filter(is_active=True,archived_at__isnull=True,starts_on__lte=today,ends_on__gte=today).first()
+    fields = DATA_STRUCTURE_RULE_FIELDS
     if source:
-        fields=['min_score','min_submissions','require_both','screenshot_points','logic_points','blog_points']
-        for field in fields:setattr(semester,field,getattr(source,field))
-        semester.save(update_fields=fields)
+        fields = ('min_score', 'min_submissions', 'require_both', 'screenshot_points', 'logic_points', 'blog_points', *fields)
+    for field in fields:
+        setattr(semester, field, getattr(source, field) if source else Semester._meta.get_field(field).get_default())
+    semester.save(update_fields=fields)
+    copy_sandbox_structures(target, team)
     if not request.session.get(USER_KEY):request.session['admin_test_previous_team']=request.session.get('team_id')
     request.session[USER_KEY]=user.pk;request.session[TEAM_KEY]=team.pk;request.session[TARGET_KEY]=target.pk
     request.session['team_id']=team.pk

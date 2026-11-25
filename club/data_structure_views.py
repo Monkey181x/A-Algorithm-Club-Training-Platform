@@ -9,9 +9,9 @@ from .models import DataStructureCollection, DataStructureImplementation, Semest
 from .services import refresh_totals
 from .submission_content import (
     CODE_LANGUAGES, DATA_STRUCTURE_BLOG_POINTS, DATA_STRUCTURE_CODE_POINTS,
-    DATA_STRUCTURE_VALID_SUBMISSIONS, data_structure_points,
+    DATA_STRUCTURE_VALID_SUBMISSIONS,
 )
-from .views import active_semester, api_error, api_login_required, body, membership_for
+from .views import active_semester, api_error, api_login_required, body, membership_for, structure_history_rows
 
 
 def collection_data(item, count):
@@ -30,7 +30,7 @@ def implementation_data(item, membership, include_code=False):
         "rejection_note": item.rejection_note,
         "is_mine": item.member_id == membership.pk,
         "training_points": item.training_points if item.training_week_id else 0,
-        "training_submissions": DATA_STRUCTURE_VALID_SUBMISSIONS if item.training_week_id and item.training_points else 0,
+        "training_submissions": item.training_submissions if item.training_week_id else 0,
     }
     if include_code:
         data.update(
@@ -38,11 +38,16 @@ def implementation_data(item, membership, include_code=False):
             training_tracked=bool(item.training_week_id),
             training_archived=bool(item.training_week_id and item.training_week.semester.archived_at),
         )
+        if item.training_week_id:
+            data["training_rules"] = {
+                "submissions": item.training_rule_submissions,
+                "code_points": item.training_rule_code_points,
+                "blog_points": item.training_rule_blog_points,
+            }
     return data
 
 
-def current_training_week(team, now):
-    semester = active_semester(team)
+def current_training_week(semester, now):
     if semester:
         return semester.weeks.filter(is_closed=False, starts_at__lte=now, ends_at__gt=now).first()
     return None
@@ -52,11 +57,26 @@ def update_training_credit(item, semester):
     # The semester lock keeps credit changes and weekly settlement consistent.
     if not semester or semester.archived_at or not item.training_week_id:
         return
-    points = 0 if item.is_rejected else data_structure_points(item.blog)
-    if item.training_points != points:
-        item.training_points = points
-        item.save(update_fields=["training_points"])
-        refresh_totals(semester)
+    submissions = points = 0
+    if not item.is_rejected:
+        submissions = item.training_rule_submissions
+        points = item.training_rule_code_points
+        if (item.blog or "").strip():
+            points += item.training_rule_blog_points
+    if (item.training_submissions, item.training_points) == (submissions, points):
+        return
+    item.training_submissions = submissions
+    item.training_points = points
+    item.save(update_fields=["training_submissions", "training_points"])
+    refresh_totals(semester)
+
+
+def structure_read_error(membership, scope):
+    if scope == "manage":
+        if not membership.is_admin:
+            return api_error("仅管理员可以查看全部提交", 403)
+    elif not membership.team.data_structures_enabled:
+        return api_error("当前团队已关闭数据结构", 403)
 
 
 def collection_fields(data):
@@ -87,8 +107,8 @@ def collections(request, collection_id=None):
     items = DataStructureCollection.objects.filter(team=membership.team, deleted_at__isnull=True)
     if request.method == "GET":
         scope = request.GET.get("scope", "team")
-        if scope == "manage" and not membership.is_admin:
-            return api_error("仅管理员可以查看全部提交", 403)
+        if error := structure_read_error(membership, scope):
+            return error
         if collection_id is None:
             count = Count("implementations", filter=visible_implementations(scope, membership, "implementations__"))
             summaries = items.annotate(entry_count=count)
@@ -120,7 +140,10 @@ def collections(request, collection_id=None):
         entries = item.implementations.filter(visible_implementations(scope, membership)).select_related("member").defer(
             "code", "blog", "notes",
         )
-        can_submit = bool(membership.pk and not request.user.is_superuser and item.is_open)
+        can_submit = bool(
+            membership.pk and not request.user.is_superuser and membership.team.data_structures_enabled and item.is_open
+        )
+        semester = active_semester(item.team)
         return JsonResponse({
             "collection": collection_data(item, len(entries)),
             "implementations": [implementation_data(entry, membership) for entry in entries],
@@ -128,10 +151,10 @@ def collections(request, collection_id=None):
             "can_manage": membership.is_admin,
             "can_submit": can_submit,
             "training_rules": {
-                "submissions": DATA_STRUCTURE_VALID_SUBMISSIONS,
-                "code_points": DATA_STRUCTURE_CODE_POINTS,
-                "blog_points": DATA_STRUCTURE_BLOG_POINTS,
-                "available": bool(can_submit and current_training_week(item.team, timezone.now())),
+                "submissions": semester.data_structure_valid_submissions if semester else DATA_STRUCTURE_VALID_SUBMISSIONS,
+                "code_points": semester.data_structure_code_points if semester else DATA_STRUCTURE_CODE_POINTS,
+                "blog_points": semester.data_structure_blog_points if semester else DATA_STRUCTURE_BLOG_POINTS,
+                "available": bool(can_submit and current_training_week(semester, timezone.now())),
             },
         })
     allowed = ("PATCH", "DELETE") if collection_id is not None else ("POST",)
@@ -233,14 +256,25 @@ def implementations(request, collection_id, implementation_id=None):
     items = DataStructureCollection.objects.filter(team=membership.team, deleted_at__isnull=True)
     if request.method == "GET" and implementation_id is not None:
         scope = request.GET.get("scope", "team")
-        if scope == "manage" and not membership.is_admin:
-            return api_error("仅管理员可以查看全部提交", 403)
-        item = DataStructureImplementation.objects.filter(
-            collection__in=items, collection_id=collection_id, pk=implementation_id,
-        ).filter(visible_implementations(scope, membership)).select_related("member", "training_week__semester").first()
+        if scope == "history":
+            if not membership.pk:
+                return api_error("代码实现不存在", 404)
+            entries = structure_history_rows(membership)
+        else:
+            if error := structure_read_error(membership, scope):
+                return error
+            entries = DataStructureImplementation.objects.filter(
+                visible_implementations(scope, membership), collection__in=items,
+            )
+        item = entries.filter(collection_id=collection_id, pk=implementation_id).select_related(
+            "member", "training_week__semester",
+        ).first()
         if item is None:
             return api_error("代码实现不存在", 404)
-        return JsonResponse(implementation_data(item, membership, include_code=True))
+        response = JsonResponse(implementation_data(item, membership, include_code=True))
+        if scope == "history":
+            response["Cache-Control"] = "private, no-store"
+        return response
 
     allowed = ("PATCH",) if implementation_id is not None else ("POST",)
     if request.method not in allowed:
@@ -260,11 +294,14 @@ def implementations(request, collection_id, implementation_id=None):
         ).order_by().values_list("training_week__semester_id", flat=True).first()
     else:
         if membership.pk and not request.user.is_superuser:
-            week = current_training_week(membership.team, received_at)
+            week = current_training_week(active_semester(membership.team), received_at)
         semester_id = week.semester_id if week else None
     with transaction.atomic():
         semester = Semester.objects.select_for_update().filter(pk=semester_id).first() if semester_id else None
-        # Lock the semester first, then serialize against collection updates and deletion.
+        # Follow configuration's semester-before-team order, then lock the collection.
+        team = Team.objects.select_for_update().filter(pk=membership.team_id).first()
+        if team is None:
+            return api_error("当前团队不存在", 404)
         collection = items.select_for_update().filter(pk=collection_id).first()
         if collection is None:
             return api_error("数据结构不存在", 404)
@@ -305,6 +342,8 @@ def implementations(request, collection_id, implementation_id=None):
                         or data.get("notes", "").strip() != previous.notes):
                     return api_error("这次提交已保存，请打开已有记录查看或编辑", 409)
                 return JsonResponse(implementation_data(previous, membership))
+        if not team.data_structures_enabled:
+            return api_error("当前团队已关闭数据结构", 403)
         if not collection.is_open:
             return api_error("该数据结构已关闭提交", 409)
         language = item.language if item else data.get("language")
@@ -330,9 +369,15 @@ def implementations(request, collection_id, implementation_id=None):
                 ).first()
             else:
                 week = None
+            training_rules = {
+                "training_rule_submissions": semester.data_structure_valid_submissions,
+                "training_rule_code_points": semester.data_structure_code_points,
+                "training_rule_blog_points": semester.data_structure_blog_points,
+            } if week else {}
             item = collection.implementations.create(
                 member=membership, language=language, code=code, notes=notes.strip(), blog=blog,
                 training_week=week, training_date=record_date if week else None, request_id=request_id,
+                **training_rules,
             )
             update_training_credit(item, semester)
             return JsonResponse(implementation_data(item, membership), status=201)

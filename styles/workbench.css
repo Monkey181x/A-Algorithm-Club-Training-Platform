@@ -151,7 +151,13 @@ html[data-site-mode="dark"] #adminView :is(input, select) { color-scheme: dark; 
 :is(.team-management-dialog,.global-account-modal,.moderation-modal) .tm-password { display: flex; align-items: center; gap: 6px; }
 :is(.team-management-dialog,.global-account-modal,.moderation-modal) .tm-password button { width: 42px; height: 42px; flex: none; background: var(--site-fill, var(--canvas)); color: var(--site-accent, var(--teal)); border: 1px solid var(--site-border, var(--line)); border-radius: var(--site-inner-radius, 12px); }
 :is(.team-management-dialog,.global-account-modal,.moderation-modal) .tm-password svg { width: 20px; height: 20px; vertical-align: middle; }
-:is(.team-management-dialog,.global-account-modal,.moderation-modal) :is(.tm-card, .workbench-cleanup, .workbench-semester-dates, .currency-config-options, .problem-reward-grid fieldset) { min-width: 0; padding: 22px; border: 1px solid var(--site-border, var(--line)); background: var(--site-surface, var(--panel)); border-radius: var(--site-inner-radius, 16px); margin: 0 0 18px; }
+:is(.team-management-dialog,.global-account-modal,.moderation-modal) :is(.tm-card, .workbench-cleanup, .workbench-semester-dates, .workbench-scoring, .currency-config-options, .problem-reward-grid fieldset) { min-width: 0; padding: 22px; border: 1px solid var(--site-border, var(--line)); background: var(--site-surface, var(--panel)); border-radius: var(--site-inner-radius, 16px); margin: 0 0 18px; }
+.team-management-dialog [data-team-settings-form] > :is(.workbench-check, .workbench-scoring) { grid-column: 1 / -1; }
+.team-management-dialog fieldset.workbench-scoring { margin: 0; }
+.team-management-dialog .workbench-scoring legend { padding: 0 6px; font-weight: 700; }
+.team-management-dialog .workbench-score-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.team-management-dialog .workbench-scoring > p { margin-top: 12px; }
+.team-management-dialog .workbench-scoring > .workbench-check + p { margin: 8px 0 14px; }
 :is(.team-management-dialog,.global-account-modal,.moderation-modal) .workbench-check { flex-direction: row !important; align-items: center; padding: 12px; border: 1px solid var(--site-border, var(--line)); border-radius: var(--site-inner-radius, 12px); background: var(--site-fill, var(--canvas)); }
 :is(.team-management-dialog,.global-account-modal,.moderation-modal) .workbench-currency-settings { border: 0; padding-top: 0; margin-top: 0; }
 :is(.team-management-dialog,.global-account-modal,.moderation-modal) .currency-config-panel.workbench-form { display: block; }
@@ -197,6 +203,7 @@ html[data-site-mode="dark"] :is(.team-management-dialog,.global-account-modal,.m
   :is(.team-management-dialog,.global-account-modal,.moderation-modal) #tmMemberList { display: flex; max-height: none; gap: 6px; }
   :is(.team-management-dialog,.global-account-modal,.moderation-modal) .tm-member-choice { width: auto; min-width: 180px; }
   :is(.team-management-dialog,.global-account-modal,.moderation-modal) :is(.tm-form, .workbench-form) { grid-template-columns: 1fr; }
+  .team-management-dialog .workbench-score-fields { grid-template-columns: 1fr; }
   :is(.team-management-dialog,.global-account-modal,.moderation-modal) .tm-card { padding: 16px; }
   :is(.team-management-dialog,.global-account-modal,.moderation-modal) .tm-balance { grid-template-columns: 1fr 1fr; }
   :is(.team-management-dialog,.global-account-modal,.moderation-modal) .tm-balance > button { grid-column: 1 / -1; }

@@ -6,6 +6,8 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
+from .submission_content import DATA_STRUCTURE_BLOG_POINTS, DATA_STRUCTURE_CODE_POINTS, DATA_STRUCTURE_VALID_SUBMISSIONS
+
 
 class AstrBotNotification(models.Model):
     """Transactional outbox; retained after delivery for idempotency and inspection."""
@@ -91,6 +93,7 @@ class Team(models.Model):
     cleanup_delay_days = models.PositiveIntegerField(default=30, validators=[MinValueValidator(1)])
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="created_teams")
     created_at = models.DateTimeField(auto_now_add=True)
+    data_structures_enabled = models.BooleanField(default=True)
 
     # Currency system configuration
     currency_enabled = models.BooleanField(default=False, verbose_name="启用货币系统")
@@ -142,6 +145,9 @@ class Semester(models.Model):
     screenshot_points = models.PositiveIntegerField(default=1)
     logic_points = models.PositiveIntegerField(default=1)
     blog_points = models.PositiveIntegerField(default=1)
+    data_structure_valid_submissions = models.PositiveIntegerField(default=DATA_STRUCTURE_VALID_SUBMISSIONS)
+    data_structure_code_points = models.PositiveIntegerField(default=DATA_STRUCTURE_CODE_POINTS)
+    data_structure_blog_points = models.PositiveIntegerField(default=DATA_STRUCTURE_BLOG_POINTS)
     cleanup_at = models.DateTimeField(null=True, blank=True)
     archived_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
@@ -1025,9 +1031,14 @@ class DataStructureCollection(models.Model):
     deleted_at = models.DateTimeField(null=True, blank=True)
     position = models.PositiveBigIntegerField(default=0)
     version = models.PositiveIntegerField(default=1)
+    # A sandbox keeps the source ID even when the original project is removed.
+    sandbox_source_id = models.PositiveBigIntegerField(null=True, editable=False)
 
     class Meta:
         ordering = ["position", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["team", "sandbox_source_id"], name="unique_team_sandbox_structure"),
+        ]
 
 
 class DataStructureImplementation(models.Model):
@@ -1042,7 +1053,11 @@ class DataStructureImplementation(models.Model):
     rejection_note = models.TextField(blank=True, default='')
     training_week = models.ForeignKey(Week, null=True, blank=True, on_delete=models.SET_NULL, related_name="data_structure_submissions")
     training_date = models.DateField(null=True, editable=False)
-    training_points = models.PositiveSmallIntegerField(default=0)
+    training_points = models.PositiveIntegerField(default=0)
+    training_submissions = models.PositiveIntegerField(default=0)
+    training_rule_submissions = models.PositiveIntegerField(default=DATA_STRUCTURE_VALID_SUBMISSIONS)
+    training_rule_code_points = models.PositiveIntegerField(default=DATA_STRUCTURE_CODE_POINTS)
+    training_rule_blog_points = models.PositiveIntegerField(default=DATA_STRUCTURE_BLOG_POINTS)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

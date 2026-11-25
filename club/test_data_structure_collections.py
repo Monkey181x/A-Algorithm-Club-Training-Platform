@@ -67,6 +67,172 @@ class DataStructureCollectionTests(TestCase):
             content_type="application/json",
         )
 
+    def test_team_switch_blocks_member_actions_and_preserves_project_states_and_history(self):
+        open_url = self.create_collection()
+        closed = DataStructureCollection.objects.create(
+            team=self.member.team, name="关闭的项目", languages=["python"], is_open=False,
+        )
+        today = timezone.localdate()
+        semester = Semester.objects.create(
+            team=self.member.team, name="训练", starts_on=today, ends_on=today + timedelta(days=7),
+        )
+        week = build_weeks(semester)[0]
+        self.log_in(self.member)
+        saved = self.submit(open_url).json()
+        rejected = self.submit(open_url).json()
+        saved_url = f"{open_url}/implementations/{saved['id']}"
+        rejected_url = f"{open_url}/implementations/{rejected['id']}"
+        self.assertEqual(self.client.get("/api/me").json()["team"]["data_structures_enabled"], True)
+        self.log_in(self.admin)
+        result = self.client.patch(
+            rejected_url, {"action": "reject", "rejection_note": "请修改"}, content_type="application/json",
+        )
+        self.assertEqual(result.status_code, 200)
+
+        settings_url = f"/api/management/teams/{self.member.team_id}/settings"
+        root = User.objects.get(username="admin")
+        self.client.force_login(root)
+        settings = self.client.get(settings_url).json()
+        self.assertTrue(settings["data_structures_enabled"])
+        payload = {**settings["semester"], "name": settings["name"], "code": settings["code"],
+                   "settings_version": settings["settings_version"]}
+        invalid = self.client.put(settings_url, {**payload, "data_structures_enabled": 0}, content_type="application/json")
+        self.assertEqual(invalid.status_code, 400)
+        result = self.client.put(settings_url, {**payload, "data_structures_enabled": False}, content_type="application/json")
+        self.assertEqual(result.status_code, 200, result.content)
+        self.assertFalse(self.client.get(settings_url).json()["data_structures_enabled"])
+
+        self.log_in(self.member)
+        self.assertFalse(self.client.get("/api/me").json()["team"]["data_structures_enabled"])
+        for url in (self.endpoint, open_url, saved_url, self.endpoint + "?scope=manage"):
+            self.assertEqual(self.client.get(url).status_code, 403)
+        self.assertEqual(self.submit(open_url).status_code, 403)
+        for url, edit in ((saved_url, {"code": "new"}), (rejected_url, {"action": "resubmit", "code": "new"})):
+            self.assertEqual(self.client.patch(url, edit, content_type="application/json").status_code, 403)
+        self.assertEqual(progress_rows(semester, week), ({self.member.pk: 2}, {self.member.pk: 2}))
+        history = self.client.get(f"/api/members/{self.member.pk}/history", {"week": week.number}).json()
+        self.assertEqual([row["id"] for row in history["data_structure_submissions"]], [saved["id"]])
+
+        self.log_in(self.admin)
+        managed = self.client.get(self.endpoint + "?scope=manage").json()
+        self.assertEqual({row["is_open"] for row in managed["collections"]}, {True, False})
+        self.assertFalse(self.client.get(open_url + "?scope=manage").json()["can_submit"])
+        self.assertEqual(self.client.get(saved_url + "?scope=manage").json()["code"], self.code)
+        self.log_in(self.outsider)
+        self.assertTrue(self.client.get("/api/me").json()["team"]["data_structures_enabled"])
+        self.assertEqual(self.client.get(self.endpoint).status_code, 200)
+
+        self.client.force_login(root)
+        payload["settings_version"] = self.client.get(settings_url).json()["settings_version"]
+        result = self.client.put(settings_url, {**payload, "data_structures_enabled": True}, content_type="application/json")
+        self.assertEqual(result.status_code, 200, result.content)
+        self.log_in(self.member)
+        self.assertTrue(self.client.get("/api/me").json()["team"]["data_structures_enabled"])
+        self.assertEqual(self.submit(open_url).status_code, 201)
+        self.assertEqual(self.submit(f"{self.endpoint}/{closed.pk}").status_code, 409)
+
+    def test_configured_rules_snapshot_counts_and_points_independently(self):
+        url = self.create_collection()
+        today = timezone.localdate()
+        semester = Semester.objects.create(
+            team=self.member.team, name="训练", starts_on=today, ends_on=today + timedelta(days=7),
+        )
+        week = build_weeks(semester)[0]
+        self.log_in(self.member)
+        original = self.submit(url).json()
+        self.assertEqual((original["training_submissions"], original["training_points"]), (2, 2))
+
+        root = User.objects.get(username="admin")
+        self.client.force_login(root)
+        settings_url = f"/api/management/teams/{self.member.team_id}/settings"
+        settings = self.client.get(settings_url).json()
+        payload = {**settings["semester"], "name": settings["name"], "code": settings["code"],
+                   "settings_version": settings["settings_version"]}
+        payload.update(data_structure_valid_submissions=1, data_structure_code_points=0, data_structure_blog_points=0)
+        response = self.client.put(settings_url, payload, content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        updated = self.client.get(settings_url).json()
+        self.assertEqual(updated["semester"]["data_structure_code_points"], 0)
+        payload["settings_version"] = updated["settings_version"]
+        invalid = self.client.put(settings_url, {**payload, "data_structure_blog_points": True}, content_type="application/json")
+        self.assertEqual(invalid.status_code, 400)
+
+        self.log_in(self.member)
+        rules = self.client.get(url).json()["training_rules"]
+        self.assertEqual(rules, {"submissions": 1, "code_points": 0, "blog_points": 0, "available": True})
+        first_url = f"{url}/implementations/{original['id']}"
+        saved_rules = self.client.get(first_url).json()["training_rules"]
+        self.assertEqual(saved_rules, {"submissions": 2, "code_points": 2, "blog_points": 2})
+        edited = self.client.patch(first_url, {"code": self.code, "blog": "补写说明"}, content_type="application/json").json()
+        self.assertEqual((edited["training_submissions"], edited["training_points"]), (2, 4))
+        count_only = self.submit(url).json()
+        self.assertEqual((count_only["training_submissions"], count_only["training_points"]), (1, 0))
+        self.assertEqual(progress_rows(semester, week), ({self.member.pk: 4}, {self.member.pk: 3}))
+        history = self.client.get(f"/api/members/{self.member.pk}/history", {"week": week.number}).json()
+        self.assertIn((1, 0), {(r["training_submissions"], r["training_points"]) for r in history["data_structure_submissions"]})
+
+        self.log_in(self.admin)
+        second_url = f"{url}/implementations/{count_only['id']}"
+        rejected = self.client.patch(
+            second_url, {"action": "reject", "rejection_note": "请修改"}, content_type="application/json",
+        ).json()
+        self.assertEqual((rejected["training_submissions"], rejected["training_points"]), (0, 0))
+        self.assertEqual(progress_rows(semester, week), ({self.member.pk: 4}, {self.member.pk: 2}))
+
+        self.client.force_login(root)
+        payload.update(data_structure_valid_submissions=0, data_structure_code_points=3, data_structure_blog_points=2)
+        response = self.client.put(settings_url, payload, content_type="application/json")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.log_in(self.member)
+        resubmitted = self.client.patch(
+            second_url, {"action": "resubmit", "code": self.code, "blog": "补写说明"}, content_type="application/json",
+        ).json()
+        self.assertEqual((resubmitted["training_submissions"], resubmitted["training_points"]), (1, 0))
+        points_only = self.client.post(
+            f"{url}/implementations", {"language": "python", "code": self.code, "blog": "说明"}, content_type="application/json",
+        ).json()
+        self.assertEqual((points_only["training_submissions"], points_only["training_points"]), (0, 5))
+        self.assertEqual(progress_rows(semester, week), ({self.member.pk: 9}, {self.member.pk: 3}))
+        totals = SemesterMemberTotal.objects.get(semester=semester, member=self.member)
+        self.assertEqual((totals.total_submissions, totals.total_score), (3, 9))
+
+        self.log_in(self.admin)
+        export = self.client.get("/api/export", {"semester": semester.pk})
+        book = load_workbook(BytesIO(b"".join(export.streaming_content)))
+        credits = {row[6:] for row in list(book["数据结构提交"].values)[1:]}
+        self.assertEqual(credits, {(2, 4), (1, 0), (0, 5)})
+
+    def test_zero_credit_history_stays_visible_to_the_author_when_the_team_disables_structures(self):
+        url = self.create_collection()
+        today = timezone.localdate()
+        semester = Semester.objects.create(
+            team=self.member.team, name="训练", starts_on=today, ends_on=today + timedelta(days=7),
+            data_structure_valid_submissions=0, data_structure_code_points=0, data_structure_blog_points=0,
+        )
+        week = build_weeks(semester)[0]
+        self.log_in(self.member)
+        response = self.submit(url)
+        self.assertEqual(response.status_code, 201, response.content)
+        entry = response.json()
+        self.assertEqual((entry["training_submissions"], entry["training_points"]), (0, 0))
+        Team.objects.filter(pk=self.member.team_id).update(data_structures_enabled=False)
+        member_url = f"/api/members/{self.member.pk}"
+        history = self.client.get(f"{member_url}/history", {"week": week.number}).json()["data_structure_submissions"]
+        profile = self.client.get(f"{member_url}/profile").json()["submissions"]
+        self.assertEqual(profile, history)
+        self.assertEqual([record["id"] for record in history], [entry["id"]])
+        self.assertTrue(history[0]["can_view"])
+        detail = f"{url}/implementations/{entry['id']}"
+        self.assertEqual(self.client.get(detail).status_code, 403)
+        self.assertEqual(self.client.get(detail, {"scope": "history"}).json()["code"], self.code)
+        self.assertEqual(self.client.patch(detail + "?scope=history", {"code": "change"}, content_type="application/json").status_code, 403)
+        self.assertEqual(progress_rows(semester, week), ({}, {}))
+        for viewer in (self.reader, self.outsider):
+            self.log_in(viewer)
+            self.assertEqual(self.client.get(detail, {"scope": "history"}).status_code, 404)
+            if viewer == self.reader:
+                self.assertFalse(self.client.get(f"{member_url}/profile").json()["submissions"][0]["can_view"])
+
     def test_structure_credit_date_survives_edits_and_guards_both_term_boundaries(self):
         url = self.create_collection()
         self.log_in(self.member)

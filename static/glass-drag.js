@@ -2,11 +2,12 @@
 (() => {
   let gesture = null, frame = 0, suppressed = null;
   const visible = button => !button.disabled && !button.hidden && button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden';
-  function describe(button) {
+  function describe(button, pointerType) {
     const group = button.closest('.segmented, .auth-tabs, .sidebar');
     if (!group) return null;
     const type = group.matches('.sidebar') ? 'menu' : group.matches('.auth-tabs') ? 'auth' : 'segment';
-    if (type === 'menu' && !button.matches('.nav-item')) return null;
+    // Touch swipes scroll the sidebar, including when they start on a menu button.
+    if (type === 'menu' && (pointerType === 'touch' || !button.matches('.nav-item'))) return null;
     const selector = type === 'menu' ? '.nav-item' : type === 'auth' ? '[data-auth-tab]' : '.segment';
     const items = [...group.querySelectorAll(selector)].filter(visible);
     const indicator = group.querySelector(type === 'menu' ? '.menu-glass-indicator' : type === 'auth' ? '.auth-glass-indicator' : '.segment-indicator');
@@ -66,7 +67,7 @@
   document.addEventListener('pointerdown', event => {
     if (gesture || event.isPrimary === false || event.button !== 0) return;
     const button = event.target.closest('button');
-    const state = button && describe(button);
+    const state = button && describe(button, event.pointerType);
     if (!state) return;
     gesture = {...state, id:event.pointerId, start:state.axis === 'x' ? event.clientX : event.clientY,
       otherStart:state.axis === 'x' ? event.clientY : event.clientX, coordinate:0,

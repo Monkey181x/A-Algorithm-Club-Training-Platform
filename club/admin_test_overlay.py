@@ -4,10 +4,12 @@ No test membership/submission is written into the real team. Mutations still run
 as the private ordinary user and therefore cannot edit real-team records.
 """
 import copy
+from datetime import timedelta
 import json
 import re
 from django.http import JsonResponse
 from django.db.models import Count, Sum
+from django.db.models.functions import Coalesce, TruncDate
 from django.utils import timezone
 from .models import Submission, SubmissionPart, TeamMembership, Week
 
@@ -29,13 +31,32 @@ def protect_real(data):
     return data
 
 
+def private_structures(member, week=None, semester=None):
+    from .views import structure_history_rows
+
+    rows = structure_history_rows(member).filter(training_week__isnull=False)
+    rows = rows.alias(credited_on=Coalesce('training_date', TruncDate('training_week__starts_at')))
+    if semester:
+        rows = rows.filter(credited_on__gte=semester.starts_on, credited_on__lt=semester.ends_on + timedelta(days=1))
+    if week:
+        rows = rows.filter(credited_on__gte=timezone.localdate(week.starts_at),
+                           credited_on__lt=timezone.localdate(week.ends_at))
+    return rows
+
+
+def structure_progress(rows):
+    totals = rows.aggregate(score=Sum('training_points', default=0), count=Sum('training_submissions', default=0))
+    return totals['score'], totals['count']
+
+
 def test_progress(member,week):
     query=Submission.objects.filter(member=member,is_valid=True)
     if week:
         query=query.filter(record_date__gte=timezone.localdate(week.starts_at),record_date__lt=timezone.localdate(week.ends_at))
     parts=SubmissionPart.objects.filter(submission__in=query,status='approved')
-    return (parts.aggregate(n=Sum('points_awarded'))['n'] or 0,
-        query.filter(parts__kind='proof',parts__status='approved').distinct().count(),
+    structure_score, structure_count = structure_progress(private_structures(member, week))
+    return (parts.aggregate(n=Sum('points_awarded', default=0))['n'] + structure_score,
+        query.filter(parts__kind='proof',parts__status='approved').distinct().count() + structure_count,
         query.filter(parts__kind='proof',parts__status='approved').aggregate(n=Count('problem_id',distinct=True))['n'] or 0)
 
 
@@ -76,7 +97,7 @@ def overlay(request,get_response):
     if path=='/api/semesters':return get_response(real)
     history=re.fullmatch(r'/api/members/(\d+)/history',path)
     if history and int(history[1])==member.pk:
-        from .views import serialize_submission
+        from .views import serialize_submission, structure_history_items
         from .services import qualified
         term=request.GET.get('semester')
         number=request.GET.get('week')
@@ -90,7 +111,17 @@ def overlay(request,get_response):
         if selected:query=query.filter(record_date__gte=timezone.localdate(selected.starts_at),record_date__lt=timezone.localdate(selected.ends_at))
         score=SubmissionPart.objects.filter(submission__in=query,status='approved').aggregate(n=Sum('points_awarded'))['n'] or 0
         count=query.filter(parts__kind='proof',parts__status='approved').distinct().count()
-        return json_response({'member':{'id':member.pk,'name':'管理员'},'summary':{'score':score,'submissions':count,'qualified':qualified(score,count,selected) if selected else None},'submissions':[dict(serialize_submission(item),is_test=True) for item in query],'test_overlay':True})
+        structures = private_structures(member, selected, sem)
+        structure_score, structure_count = structure_progress(structures)
+        score += structure_score
+        count += structure_count
+        return json_response({
+            'member': {'id':member.pk, 'name':'管理员'},
+            'summary': {'score':score, 'submissions':count, 'qualified':qualified(score,count,selected) if selected else None},
+            'submissions': [dict(serialize_submission(item), is_test=True) for item in query],
+            'data_structure_submissions': structure_history_items(structures, can_view=True),
+            'test_overlay': True,
+        })
     if detail:
         # Admin rights authorize reading the selected team's material only.
         match=re.fullmatch(r'/api/attachments/(\d+)',path)

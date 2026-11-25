@@ -7,7 +7,6 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from .models import CleanupJob, DataStructureImplementation, ReviewLog, Semester, SemesterMemberTotal, Submission, SubmissionPart, TeamMembership, Week
-from .submission_content import DATA_STRUCTURE_VALID_SUBMISSIONS
 
 
 def score_part(part):
@@ -36,7 +35,8 @@ def progress_rows(semester, week=None, member_ids=None, submission_ids=None, *, 
                   .values_list(*fields, 'total'))
     if submission_ids is None:
         implementations = DataStructureImplementation.objects.filter(
-            training_week__semester=semester, training_points__gt=0, member_id__isnull=False,
+            models.Q(training_points__gt=0) | models.Q(training_submissions__gt=0),
+            training_week__semester=semester, member_id__isnull=False,
         )
         if week is not None:
             implementations = implementations.filter(training_week=week)
@@ -44,7 +44,7 @@ def progress_rows(semester, week=None, member_ids=None, submission_ids=None, *, 
             implementations = implementations.filter(member_id__in=member_ids)
         credit_fields = ["training_week_id", "member_id"] if by_week else ["member_id"]
         credits = (implementations.order_by().values(*credit_fields).annotate(
-            total=models.Sum("training_points"), equivalents=models.Count("id") * DATA_STRUCTURE_VALID_SUBMISSIONS,
+            total=models.Sum("training_points"), equivalents=models.Sum("training_submissions"),
         ).values_list(*credit_fields, "total", "equivalents"))
         score_rows = score_rows.union(credits, all=True)
 

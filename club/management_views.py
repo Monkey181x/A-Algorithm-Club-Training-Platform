@@ -1,4 +1,6 @@
 from functools import wraps
+from hashlib import sha256
+import json
 import math
 from datetime import datetime, timedelta
 
@@ -9,12 +11,14 @@ from django.db.models import Q, Count, Sum, F
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.core.paginator import Paginator
+from django.core.serializers.json import DjangoJSONEncoder
 from django.utils import timezone
 from django.http import JsonResponse
 
 from .models import Team, TeamMembership, Semester, Submission, SemesterMemberTotal, SubmissionPart, FileDeletion, ReviewLog, CleanupJob, ParserSettings, Problem
 from .views import api_login_required, api_error, body, membership_for
 from .currency_config import config_data, validate_config, apply_config
+from .submission_content import DATA_STRUCTURE_RULE_FIELDS
 
 
 def administrator_required(view):
@@ -291,23 +295,37 @@ def team_configuration(request, team_id):
     # Lock semesters before team rows, matching scoring/archive/deletion.
     semester = Semester.objects.select_for_update().filter(team=team, is_active=True, archived_at__isnull=True).first()
     team = Team.objects.select_for_update().get(pk=team_id)
+    numeric_fields = ('min_submissions', 'min_score', 'screenshot_points', 'logic_points', 'blog_points')
+    semester_settings = {key: getattr(semester, key) for key in (
+        'name', 'starts_on', 'ends_on', 'calendar_managed', 'require_both', *numeric_fields, *DATA_STRUCTURE_RULE_FIELDS,
+    )} if semester else None
+    settings_version = sha256(json.dumps(
+        [team.pk, team.name, team.code, team.data_structures_enabled, semester.pk if semester else None, semester_settings],
+        cls=DjangoJSONEncoder, sort_keys=True,
+    ).encode()).hexdigest()
     if request.method == 'GET':
         return JsonResponse({
             'name': team.name,
             'code': team.code,
+            'data_structures_enabled': team.data_structures_enabled,
             'cleanup': cleanup_schedule_data(semester),
-            'semester': {k: getattr(semester, k) for k in ['name', 'starts_on', 'ends_on', 'calendar_managed', 'min_submissions', 'min_score', 'require_both', 'screenshot_points', 'logic_points', 'blog_points']} if semester else None,
+            'semester': semester_settings,
+            'settings_version': settings_version,
             **config_data(team)
         })
     if request.method != 'PUT':
         return api_error('仅支持GET或PUT', 405)
     data = body(request)
+    if data.get('settings_version') != settings_version:
+        return api_error('团队配置已变化或页面版本过旧，请重新打开后再保存', 409)
     name,code=[str(data.get(k,'')).strip() for k in ('name','code')]
     if not 1 <= len(name) <= 80 or not 1 <= len(code) <= 32:
         return api_error('团队名或团队码长度无效')
     if Team.objects.filter(code__iexact=code).exclude(pk=team_id).exists():
         return api_error('团队码已被使用')
-    fields = ['min_submissions', 'min_score', 'screenshot_points', 'logic_points', 'blog_points']
+    if 'data_structures_enabled' in data and type(data['data_structures_enabled']) is not bool:
+        return api_error('请指定是否启用数据结构')
+    fields = (*numeric_fields, *(field for field in DATA_STRUCTURE_RULE_FIELDS if field in data))
     if semester and (any(type(data.get(k)) is not int or not 0 <= data[k] <= 100000 for k in fields) or type(data.get('require_both')) is not bool):
         return api_error('计分与达标规则无效')
     try:
@@ -333,9 +351,10 @@ def team_configuration(request, team_id):
             except ValidationError as exc:
                 return api_error('; '.join(exc.messages))
     team.name, team.code = name, code
+    team.data_structures_enabled = data.get('data_structures_enabled', team.data_structures_enabled)
     team.save()
     if semester:
-        for field in fields + ['require_both']:
+        for field in (*fields, 'require_both'):
             setattr(semester, field, data[field])
         semester.save()
         from .services import refresh_totals

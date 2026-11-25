@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from .models import DataStructureImplementation, Semester, Team, Week
 from .services import build_weeks, refresh_totals, validate_week_dates
+from .submission_content import DATA_STRUCTURE_RULE_FIELDS
 
 
 def semester_bounds(day):
@@ -37,8 +38,10 @@ def ensure_current_semester(team, day=None):
     template = terms[0]
     if template.starts_on > start or template.ends_on >= day:
         return None
-    rules = {field: getattr(template, field) for field in
-             ('min_submissions', 'min_score', 'require_both', 'screenshot_points', 'logic_points', 'blog_points')}
+    rules = {field: getattr(template, field) for field in (
+        'min_submissions', 'min_score', 'require_both', 'screenshot_points', 'logic_points', 'blog_points',
+        *DATA_STRUCTURE_RULE_FIELDS,
+    )}
     for term in terms:
         if term.is_active and term.ends_on < start and not term.archived_at:
             validate_week_dates(term)

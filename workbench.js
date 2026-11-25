@@ -16,7 +16,7 @@ document.querySelector('#adminView').innerHTML = `
     <h3>洛谷提交记录查询</h3><form id="wbLuoguQueryForm" class="workbench-form"><label>全站查询 Cookie<input name="cookie" type="password" autocomplete="new-password" maxlength="8192" placeholder="_uid=…; __client_id=…"><small id="wbLuoguCookieHint"></small></label><label class="workbench-check"><input name="clear_cookie" type="checkbox">清除查询 Cookie</label><div><button class="primary-button" type="submit">保存查询配置</button></div></form><p class="muted">统一用于查询成员的公开提交时间，加密保存；受隐私保护的记录不保证可查询。成员无需填写 Cookie。</p>
   </section>
   <section class="panel workbench-panel" id="wbPendingSection" hidden><div class="panel-heading"><div><p class="section-label">TITLE INBOX</p><h2>待处理题目名称</h2></div></div><div id="wbProblemQueue"></div><button class="secondary-button" id="wbProblemsMore" hidden>加载更多题目</button></section>
-  <section class="panel workbench-panel" id="wbDataStructuresSection" hidden><div class="panel-heading"><h2>数据结构管理</h2><div class="data-structure-actions"><button type="button" class="secondary-button" id="wbOrderDataStructures" hidden>调整顺序</button><button type="button" class="primary-button" id="wbAddDataStructure">新增数据结构</button></div></div><div id="wbDataStructureList"></div></section>
+  <section class="panel workbench-panel" id="wbDataStructuresSection" hidden><div class="panel-heading"><h2>数据结构管理</h2><div class="data-structure-actions"><button type="button" class="secondary-button" id="wbOrderDataStructures" hidden>调整顺序</button><button type="button" class="primary-button" id="wbAddDataStructure">新增数据结构</button></div></div><p id="wbDataStructuresDisabled" class="muted" hidden>团队总开关已关闭，成员暂时无法提交。</p><div id="wbDataStructureList"></div></section>
   <section class="panel workbench-panel" id="wbReportsSection"><div class="panel-heading"><div><p class="section-label">REPORTS</p><h2>举报处理</h2></div><span class="muted" id="wbReportScope"></span></div><div id="reviewList" class="solution-waterfall"></div><button id="reportsMore" class="secondary-button" hidden>加载更多举报</button></section>
   <section class="panel workbench-panel" id="wbTeamsSection" hidden><div class="panel-heading"><div><p class="section-label">TEAMS</p><h2>团队配置</h2></div></div>
 <details id="wbCreateSection" class="workbench-details" hidden><summary>创建团队 ＋</summary><form id="wbCreateTeamForm" class="workbench-form"><label>团队名称<input name="team_name" maxlength="80" required></label><label>团队码<input name="team_code" maxlength="32" required></label><p class="muted">学期每年于 2 月 15 日、8 月 1 日自动切换，周次从学期起始周计算。</p><label>每周提交要求<input name="min_submissions" type="number" min="0" max="100000" value="4" required></label><label>每周积分要求<input name="min_score" type="number" min="0" max="100000" value="10" required></label><label>截图积分<input name="screenshot_points" type="number" min="0" max="10000" value="1" required></label><label>题解积分<input name="logic_points" type="number" min="0" max="10000" value="1" required></label><label>Blog积分<input name="blog_points" type="number" min="0" max="10000" value="1" required></label><label class="workbench-check"><input name="require_both" type="checkbox" checked>提交次数和积分均需达标</label><div class="workbench-form-actions"><button class="primary-button" type="submit">创建团队</button></div></form></details>
@@ -31,6 +31,7 @@ function initWorkbench(me) {
   ['wbAccountsSection','wbCosmeticsSection','wbParserSection','wbCreateSection','wbTeamsSection','wbUpdateBackupSection','wbPasswordSection'].forEach(id => { workbench$('#'+id).hidden = !me.site_admin; });
   if (!me.can_manage_current) workbench$('#wbPendingSection').hidden = true;
   workbench$('#wbDataStructuresSection').hidden = !me.can_manage_current || !me.team;
+  workbench$('#wbDataStructuresDisabled').hidden = me.team?.data_structures_enabled !== false;
   workbench$('#wbManagedScope').hidden = me.site_admin || !me.is_team_manager;
   if (me.is_team_manager && !me.site_admin) {
     workbench$('#wbManagedTeam').innerHTML = (!me.can_manage_current ? '<option value="">请选择所管理的团队</option>' : '') + me.managed_teams.map(t => `<option value="${t.team_id}">${escapeHtml(t.team__name)}</option>`).join('');
@@ -110,10 +111,10 @@ function finishWorkbenchConfirm(value = null) {
   workbenchConfirmResolver?.(value); workbenchConfirmResolver = null;
 }
 
-function formNumbers(form, keys) {
+function formNumbers(form) {
   const data = Object.fromEntries(new FormData(form));
-  keys.forEach(k => { data[k] = Number(data[k]); });
-  data.require_both = form.elements.require_both.checked;
+  form.querySelectorAll('input[type="number"]:enabled').forEach(input => { data[input.name] = input.valueAsNumber; });
+  data.require_both = form.elements.require_both?.checked || false;
   return data;
 }
 const workbenchJSON = (method, data) => ({method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
@@ -145,7 +146,7 @@ workbench$('#wbTestParser').addEventListener('click', async event => {
 workbench$('#wbCreateTeamForm').addEventListener('submit', async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true;
   try {
-    const data = formNumbers(event.target,['min_submissions','min_score','screenshot_points','logic_points','blog_points']);
+    const data = formNumbers(event.target);
     await communityRequest('/api/auth/create-team',workbenchJSON('POST',data));
     location.href='/?view=admin';
   } catch(error) { showToast(error.message); button.disabled = false; }
@@ -158,8 +159,42 @@ async function openTeamSettings(id, force = false) {
   const host = panes.config;
   const semester = data.semester;
   const datesMarkup=semester ? `<fieldset class="workbench-semester-dates"><legend>当前学期日期</legend><label class="workbench-check"><input name="custom_semester_dates" type="checkbox" ${!semester.calendar_managed?'checked':''}>自定义学期日期</label><div class="workbench-date-fields"><label>开始日期<input name="starts_on" type="date" value="${escapeHtml(semester.starts_on)}" required ${semester.calendar_managed?'disabled':''}></label><label>结束日期<input name="ends_on" type="date" value="${escapeHtml(semester.ends_on)}" required ${semester.calendar_managed?'disabled':''}></label></div><p class="muted">开启后按所选日期显示学期热力图；关闭并保存后恢复自动学期（2月15日、8月1日切换）。日期范围须包含今天，且不能排除已有提交。</p></fieldset>` : '';
-  const numeric = [['min_submissions','每周提交要求'],['min_score','每周积分要求'],['screenshot_points','截图积分'],['logic_points','题解积分'],['blog_points','Blog积分']];
-  host.innerHTML = cleanupScheduleMarkup(data.cleanup, id, Boolean(semester)) + `<form class="workbench-form" data-team-settings-form="${id}"><label>团队名称<input name="name" required maxlength="80" value="${escapeHtml(data.name)}"></label><label>团队码<input name="code" required maxlength="32" value="${escapeHtml(data.code)}"></label>${semester ? numeric.map(([key,label]) => `<label>${label}<input name="${key}" type="number" min="0" max="100000" required value="${semester[key]}"></label>`).join('') + `<label class="workbench-check"><input name="require_both" type="checkbox" ${semester.require_both ? 'checked' : ''}>提交次数和积分均需达标</label>` : '<p class="muted">当前团队没有活动学期。</p>'}<div class="workbench-form-actions"><button class="primary-button" type="submit">保存团队配置</button></div></form>`;
+  const numberInput = (key, label) => `
+    <label>${label}<input name="${key}" type="number" min="0" max="100000" required value="${semester[key]}"></label>`;
+  host.innerHTML = cleanupScheduleMarkup(data.cleanup, id, Boolean(semester)) + `
+    <form class="workbench-form" data-team-settings-form="${id}">
+      <input type="hidden" name="settings_version" value="${escapeHtml(data.settings_version)}">
+      <label>团队名称<input name="name" required maxlength="80" value="${escapeHtml(data.name)}"></label>
+      <label>团队码<input name="code" required maxlength="32" value="${escapeHtml(data.code)}"></label>
+      ${semester ? `
+        ${numberInput('min_submissions', '每周提交要求')}
+        ${numberInput('min_score', '每周积分要求')}
+        <label class="workbench-check"><input name="require_both" type="checkbox" ${semester.require_both ? 'checked' : ''}>提交次数和积分均需达标</label>
+        <fieldset class="workbench-scoring">
+          <legend>每日一题</legend>
+          <div class="workbench-score-fields">
+            ${numberInput('screenshot_points', '截图积分')}
+            ${numberInput('logic_points', '题解积分')}
+            ${numberInput('blog_points', 'Blog 积分')}
+          </div>
+        </fieldset>` : '<p class="muted">当前团队没有活动学期。</p>'}
+      <fieldset class="workbench-scoring">
+        <legend>数据结构</legend>
+        <label class="workbench-check"><input name="data_structures_enabled" type="checkbox" aria-describedby="teamStructureSwitchHint" ${data.data_structures_enabled ? 'checked' : ''}>启用数据结构</label>
+        <p class="muted" id="teamStructureSwitchHint">关闭后隐藏成员入口并暂停提交。</p>
+        ${semester ? `
+          <div class="workbench-score-fields">
+            ${numberInput('data_structure_valid_submissions', '每份实现折算的有效提交数')}
+            ${numberInput('data_structure_code_points', '代码积分')}
+            ${numberInput('data_structure_blog_points', 'Blog 积分')}
+          </div>
+          <p class="muted">计分规则修改后从下一笔新提交开始生效。</p>` : ''}
+      </fieldset>
+      <div class="workbench-form-actions">
+        <button class="primary-button" type="submit">保存团队配置</button>
+        <p class="muted" data-team-settings-error role="alert" hidden></p>
+      </div>
+    </form>`;
   host.hidden = false;
   if (window.TeamNotifications) window.TeamNotifications.render(panes.notifications, id);
   const settingsForm=host.querySelector('[data-team-settings-form]');
@@ -179,19 +214,30 @@ document.addEventListener('submit', async event => {
   const form = event.target;
   if (!form.dataset.problemTitle && !form.dataset.teamSettingsForm) return;
   event.preventDefault(); const button = event.submitter; button.disabled = true;
+  const status = form.querySelector('[data-team-settings-error]');
+  if (status) {
+    status.hidden = true;
+    status.textContent = '';
+  }
   try {
     if (form.dataset.problemTitle) {
       await communityRequest(`/api/management/problems/${form.dataset.problemTitle}`,workbenchJSON('PATCH',{title:form.elements.title.value}));
       await loadPendingProblems(); showToast('题名已保存');
     } else {
-      const data = Object.fromEntries(new FormData(form));
-      ['min_submissions','min_score','screenshot_points','logic_points','blog_points','daily_checkin_reward'].forEach(k => { if (k in data) data[k]=Number(data[k]); });
-      data.require_both = form.elements.require_both?.checked || false;
+      const data = formNumbers(form);
+      data.data_structures_enabled = form.elements.data_structures_enabled.checked;
       if(form.elements.custom_semester_dates)data.custom_semester_dates=form.elements.custom_semester_dates.checked;
       await communityRequest(`/api/management/teams/${form.dataset.teamSettingsForm}/settings`,workbenchJSON('PUT',data));
       await loadWorkbenchTeams(); await loadLiveData(); await openTeamSettings(form.dataset.teamSettingsForm, true); showToast('团队配置已保存');
     }
-  } catch(error) { showToast(error.message); } finally { button.disabled=false; }
+  } catch (error) {
+    if (status) {
+      status.textContent = error.message;
+      status.hidden = false;
+    } else {
+      showToast(error.message);
+    }
+  } finally { button.disabled = false; }
 });
 
 document.addEventListener('click', async event => {
