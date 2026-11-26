@@ -14,7 +14,7 @@ from .reward_rules import group_for, amount_for, PLATFORMS, reward_groups
 from .views import api_login_required, api_error, body, membership_for
 
 
-from .ac_evidence import namespace, metadata, canonical, ACEvidence
+from .ac_evidence import namespace, metadata, canonical, reward_pending, ACEvidence
 
 
 def contest_identity(problem, info=None):
@@ -48,7 +48,10 @@ def available_rewards(member,platform=None,binding_id=None):
     maps={p:metadata(p) for p in enabled}
     grouped={}
     for record in evidence.records().filter(binding__platform__in=enabled).order_by('pk'):
-        b=record.binding;key=canonical(b.platform,record.problem_key,maps[b.platform]);ns=namespace(b.platform,b.account)
+        b=record.binding
+        if reward_pending(b.platform, record.problem_key, maps[b.platform]):
+            continue
+        key=canonical(b.platform,record.problem_key,maps[b.platform]);ns=namespace(b.platform,b.account)
         grouped.setdefault((ns,key),[]).append(record)
     paid=set();accounts_paid=set()
     accounts=[b.account.casefold() for b in bound]

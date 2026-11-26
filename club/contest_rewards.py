@@ -85,7 +85,7 @@ def serialize_participation(contest, member, context=None):
         from .problem_difficulty import for_problem
         difficulty_info = for_problem(p, info)
         reward_identity = snapshot.identity(p)
-        amount, group, reason = reward_for(p, member, context.get('profile'), difficulty_info=difficulty_info)
+        amount, group, reason = snapshot.reward_for(p, context.get('profile'), difficulty_info)
         taken = snapshot.claimed(p)
         if not bound:
             reason = '当前未绑定该参赛账号'
@@ -124,7 +124,7 @@ def claim_problems(member, ids=None):
         if (c.platform,c.account) not in bindings:
             continue
         from .problem_difficulty import for_problem
-        amount, group, reason = reward_for(p, member, profile, difficulty_info=for_problem(p, snapshot.info(c.platform)))
+        amount, group, reason = snapshot.reward_for(p, profile, for_problem(p, snapshot.info(c.platform)))
         if not amount or reason or snapshot.claimed(p):
             continue
         try:

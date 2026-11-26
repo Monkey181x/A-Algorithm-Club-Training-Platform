@@ -69,10 +69,12 @@
     el('trackerRefresh').disabled = data.status === 'pending' || data.details_status === 'pending';
     el('trackerRefresh').textContent = el('trackerRefresh').disabled ? '更新中…' : '刷新目录';
     const failures = data.accounts.filter(a=>a.status==='failed').map(a=>`${a.account}：${a.error || '同步失败，请重试'}`);
-    el('trackerStatus').textContent = data.error || failures.join('；') || (data.status==='pending' ? '正在更新目录…' : data.details_status==='pending' ? '正在更新题目…' : '');
+    const status = data.error || failures.join('；') || (data.status==='pending' ? '正在更新目录…' : data.details_status==='pending' ? '正在更新题目…' : '');
+    const retry = data.retry_count ? `${data.retry_count} 场题单待重试，最早重试时间 ${new Date(data.next_retry_at * 1000).toLocaleString('zh-CN')}` : '';
+    el('trackerStatus').textContent = [status, retry].filter(Boolean).join('；');
     el('trackerUpdated').textContent = data.updated_at ? new Date(data.updated_at).toLocaleString('zh-CN') : '';
     const width = Math.max(1,...data.contests.map(c=>c.problems.length));
-    el('trackerMatrix').innerHTML = data.contests.length ? `<table><thead><tr><th scope="col">比赛</th>${Array.from({length:width},(_,i)=>`<th scope="col">${i+1}</th>`).join('')}</tr></thead><tbody>${data.contests.map(c=>`<tr><th scope="row"><a href="${escape(c.url)}" target="_blank" rel="noopener noreferrer">${escape(c.title)}</a><div><span>${escape([c.year,c.category,c.site].filter(Boolean).join(' · '))}</span><strong>${c.solved} / ${c.problems.length} AC</strong></div></th>${c.problems.map(p=>`<td><a class="tracker-problem ${color(p)}${p.accepted?' is-ac':''}" href="${escape(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="${escape(p.label+' '+p.title+(p.accepted?' 已 AC':''))}" title="${escape(p.title+(displayDifficulty(p.difficulty)!=null?' · '+displayDifficulty(p.difficulty):'')+(p.difficulty_source?' · '+p.difficulty_source:''))}"><strong>${escape(p.label)}</strong><small>${p.accepted?'✓ AC':displayDifficulty(p.difficulty)??({gold:'金',silver:'银',bronze:'铜',iron:'铁'}[p.tier] || '—')}</small></a>${p.reward?`<button type="button" class="tracker-reward" data-reward-key="${escape(p.claim_key)}" aria-label="领取 ${escape(p.label)} 的 ${p.reward} Coins">+${p.reward}</button>`:''}</td>`).join('')}${'<td></td>'.repeat(width-c.problems.length)}</tr>`).join('')}</tbody></table>` : `<div class="tracker-empty">${data.status==='pending'?'正在加载比赛…':data.status==='idle'?'点击“刷新目录”加载比赛':'暂无比赛'}</div>`;
+    el('trackerMatrix').innerHTML = data.contests.length ? `<table><thead><tr><th scope="col">比赛</th>${Array.from({length:width},(_,i)=>`<th scope="col">${i+1}</th>`).join('')}</tr></thead><tbody>${data.contests.map(c=>`<tr><th scope="row"><a href="${escape(c.url)}" target="_blank" rel="noopener noreferrer">${escape(c.title)}</a><div><span>${escape([c.year,c.category,c.site].filter(Boolean).join(' · '))}</span><strong>${c.solved} / ${c.problems.length} AC</strong></div>${kind==='codeforces' ? `<div><button type="button" class="secondary-button" data-recheck-contest="${escape(c.id)}" ${data.status==='pending'?'disabled':''}>重查本场</button>${c.reward_pending ? '<span>题目核对中</span>' : ''}</div>` : ''}</th>${c.problems.map(p=>`<td><a class="tracker-problem ${color(p)}${p.accepted?' is-ac':''}" href="${escape(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="${escape(p.label+' '+p.title+(p.accepted?' 已 AC':''))}" title="${escape(p.title+(displayDifficulty(p.difficulty)!=null?' · '+displayDifficulty(p.difficulty):'')+(p.difficulty_source?' · '+p.difficulty_source:''))}"><strong>${escape(p.label)}</strong><small>${p.accepted?'✓ AC':displayDifficulty(p.difficulty)??({gold:'金',silver:'银',bronze:'铜',iron:'铁'}[p.tier] || '—')}</small></a>${p.reward?`<button type="button" class="tracker-reward" data-reward-key="${escape(p.claim_key)}" aria-label="领取 ${escape(p.label)} 的 ${p.reward} Coins">+${p.reward}</button>`:''}</td>`).join('')}${'<td></td>'.repeat(width-c.problems.length)}</tr>`).join('')}</tbody></table>` : `<div class="tracker-empty">${data.status==='pending'?'正在加载比赛…':data.status==='idle'?'点击“刷新目录”加载比赛':'暂无比赛'}</div>`;
     page = data.page;
     el('trackerResultCount').textContent = `${data.total} 场比赛`;
     el('trackerPage').textContent = `${page} / ${data.pages}`;
@@ -116,6 +118,19 @@
     try {await request(`/api/trackers/${current}/refresh`,{method:'POST'});if(version===generation)await load();}
     catch(error){if(version===generation){el('trackerStatus').textContent=error.message;el('trackerRefresh').disabled=false;}}
   };
+  el('trackerMatrix').addEventListener('click', async event => {
+    const button = event.target.closest('[data-recheck-contest]');
+    if (!button) return;
+    const version = generation;
+    button.disabled = true;
+    try {
+      await request('/api/trackers/codeforces/refresh?contest=' + encodeURIComponent(button.dataset.recheckContest), {method:'POST'});
+      if (version === generation) await load();
+    } catch (error) {
+      if (version === generation) el('trackerStatus').textContent = error.message;
+      button.disabled = false;
+    }
+  });
   el('trackerSync').onclick=async()=>{
     const ids=data.accounts.filter(a=>!el('trackerAccount').value || String(a.id)===el('trackerAccount').value).map(a=>a.id);
     const version=generation;el('trackerSync').disabled=true;
