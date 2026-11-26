@@ -16,6 +16,13 @@ class RewardSnapshot:
         self.own_legacy = set()
         self.account_legacy = set()
         for row in legacy:
+            if row['platform'] == 'codeforces':
+                # Pre-ledger claims can carry the other division's local problem key.
+                self.platform_claims.append({
+                    'platform': 'codeforces', 'account': row['account'],
+                    'user_id': member.user_id if row['member_id'] == member.pk else row['user_id'],
+                    'problem_key': f"{row['contest_key']}:{row['problem_key']}",
+                })
             key = (row['platform'], row['contest_key'], row['problem_key'])
             if row['user_id'] == member.user_id or row['member_id'] == member.pk:
                 self.own_legacy.add(key)
@@ -29,6 +36,16 @@ class RewardSnapshot:
     def identity(self, problem):
         from .platform_rewards import contest_identity
         return contest_identity(problem, self.info(problem.participation.platform))
+
+    def reward_for(self, problem, profile, difficulty_info):
+        from .ac_evidence import reward_pending
+        from .contest_rewards import reward_for
+        from .platform_solved import contest_key
+        platform = problem.participation.platform
+        amount, group, reason = reward_for(problem, self.member, profile, difficulty_info=difficulty_info)
+        if amount and platform == 'codeforces' and reward_pending(platform, contest_key(problem), self.info(platform)):
+            return 0, group, '题目核对中'
+        return amount, group, reason
 
     def claimed(self, problem):
         c = problem.participation

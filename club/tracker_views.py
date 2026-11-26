@@ -17,19 +17,31 @@ def accepted_keys(user,kind,binding_id=None):
     return ACEvidence([user.pk], platform=KINDS[kind], binding_id=binding_id).accepted_keys()
 
 
-def queue_refresh(kind,force=False):
+def queue_refresh(kind,force=False,contest_id=None):
     with transaction.atomic():
         catalog,_=TrackerCatalog.objects.get_or_create(kind=kind)
         catalog=TrackerCatalog.objects.select_for_update().get(pk=catalog.pk)
         now=timezone.now()
         if catalog.status=='pending' and catalog.requested_at and catalog.requested_at>now-timedelta(minutes=5):
+            if contest_id is not None:
+                raise ValueError('目录正在更新，请在完成后重查本场')
             return catalog
         if not force and catalog.updated_at and catalog.updated_at>now-timedelta(hours=6):
             return catalog
         if catalog.requested_at and catalog.requested_at>now-timedelta(seconds=60):
+            if contest_id is not None:
+                raise ValueError('刚刚更新过目录，请稍后重试')
             return catalog
+        state = {}
+        if contest_id is not None:
+            from .cf_tracker import round_groups
+            group = next(([e['id'] for e in group] for group in round_groups(catalog.contests)
+                          if any(e['id'] == contest_id for e in group)), None)
+            if not group:
+                raise KeyError(contest_id)
+            state = {'phase': 'cf_rosters', 'groups': [group]}
         catalog.token=uuid.uuid4();catalog.status='pending';catalog.error='';catalog.requested_at=now
-        catalog.refresh_state={};catalog.save()
+        catalog.refresh_state=state;catalog.save()
         from .tasks import refresh_tracker_catalog
         def enqueue():
             try:refresh_tracker_catalog.delay(kind,str(catalog.token))
@@ -45,7 +57,15 @@ def tracker(request,kind,refresh=False):
     if not membership_for(request):return api_error('请先加入团队',403)
     if refresh:
         if request.method!='POST':return api_error('仅支持 POST',405)
-        catalog=queue_refresh(kind,True)
+        contest_id = request.GET.get('contest')
+        if contest_id is not None and (kind != 'codeforces' or not contest_id.isascii() or not contest_id.isdecimal()):
+            return api_error('比赛编号无效', 400)
+        try:
+            catalog=queue_refresh(kind,True,contest_id)
+        except KeyError:
+            return api_error('目录中没有这场比赛', 404)
+        except ValueError as exc:
+            return api_error(str(exc), 409)
         if kind == 'icpc':
             from .tasks import enqueue_qoj_overlay
             for binding in PlatformBinding.objects.filter(user=request.user,platform='qoj').exclude(encrypted_credentials=''):
@@ -71,12 +91,16 @@ def tracker(request,kind,refresh=False):
     reward_info=metadata(KINDS[kind])
     filtered_rewards=set()
     items=[];all_items=catalog.contests if catalog else []
+    retries = [e['roster_retry_at'] for e in all_items if e.get('roster_retry_at')] if kind == 'codeforces' else []
     query=request.GET.get('q','').strip().casefold()
     for source in all_items:
         actual_problems = details.get(source['id'],source['problems'])
         if query and query not in (' '.join([source['title'],source.get('site','')]+[p['title']+' '+p['label'] for p in actual_problems])).casefold():continue
         if any(request.GET.get(key) and str(source.get(key,''))!=request.GET[key] for key in ('year','category','stage','site')):continue
         item=dict(source);problems=[]
+        if kind == 'codeforces':
+            allowed = reward_info.rounds.get(item['id'])
+            item['reward_pending'] = allowed is not None and (not allowed or len(allowed) < len(actual_problems))
         ratings = {p['label']:p for p in source['problems']}
         for source_problem in actual_problems:
             p = dict(source_problem)
@@ -110,6 +134,7 @@ def tracker(request,kind,refresh=False):
         'accounts':[{'id':b.pk,'account':b.account,'status':b.status,'error':b.error} for b in bindings],
         'status':'pending' if pending else 'failed' if catalog and catalog.status=='pending' else catalog.status if catalog else 'idle',
         'updated_at':catalog.updated_at.isoformat() if catalog and catalog.updated_at else None,
+        'retry_count':len(retries),'next_retry_at':min(retries) if retries else None,
         'details_status':'pending' if any(row.status=='pending' for row in overlays) else 'ready',
         'error':catalog.error if catalog and catalog.status=='failed' else ''})
     response['Cache-Control']='no-store'

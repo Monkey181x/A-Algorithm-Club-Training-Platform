@@ -366,7 +366,8 @@ def refresh_tracker_catalogs():
 def refresh_tracker_catalog(kind, token):
     from django.db import transaction
     from .models import TrackerCatalog
-    from .platform_sync import Remote
+    from .platform_sync import Remote, SyncError
+    from .cf_tracker import retain_roster, roster_queue, verified_rosters
     from .tracker_sources import fetch, qoj_problems
     from .tracker_ratings import board_index, enrich
     from bs4 import BeautifulSoup
@@ -393,6 +394,20 @@ def refresh_tracker_catalog(kind, token):
                 items[cid] = event
             state['ids'] = ids
             done = not ids
+        elif state.get('phase') == 'cf_rosters':
+            ids = state['groups'].pop(0)
+            group = [items[cid] for cid in ids]
+            try:
+                batch = verified_rosters(remote, group)
+                items.update((event['id'], event) for event in batch)
+            except SyncError:
+                import logging
+                logging.getLogger(__name__).warning('Codeforces roster refresh deferred: %s', ids, exc_info=True)
+                batch = []
+                retry_at = timezone.now().timestamp() + 86400
+                for event in group:
+                    event['roster_retry_at'] = retry_at
+            done = not state['groups']
         else:
             batch,state,finished = fetch(kind,remote,state)
             seen = set(state.get('seen',[]))
@@ -400,9 +415,14 @@ def refresh_tracker_catalog(kind, token):
             if kind == 'nowcoder' and batch and new_ids.issubset(seen):
                 raise ValueError('repeated catalog page')
             seen.update(new_ids);state['seen'] = sorted(seen)
+            if kind == 'codeforces':
+                cf_ratings = {p['key']: p['difficulty'] for e in batch for p in e['problems']
+                              if p['difficulty'] is not None}
             for event in batch:
                 previous = items.get(event['id'])
                 if previous:
+                    if kind == 'codeforces':
+                        retain_roster(event, previous, cf_ratings)
                     old = {p['key']:p for p in previous['problems']}
                     for p in event['problems']:
                         prior = old.get(p['key'])
@@ -413,6 +433,10 @@ def refresh_tracker_catalog(kind, token):
                     if not event['problems']:event['problems'] = previous['problems']
                 items[event['id']] = event
             done = finished
+            if finished and kind == 'codeforces':
+                groups = roster_queue(batch, timezone.now().timestamp())
+                state.update(phase='cf_rosters', groups=groups)
+                done = not groups
             if finished and kind == 'icpc':
                 state.update(phase='enrich',boards=board_index(remote),ids=sorted(seen))
                 done = not state['ids']
@@ -428,6 +452,12 @@ def refresh_tracker_catalog(kind, token):
             current.requested_at = timezone.now()
             if done:
                 current.status = 'ready';current.updated_at = timezone.now()
+                if kind == 'codeforces' and any(event.get('roster_retry_at') for event in items.values()):
+                    current.status = 'failed'
+                    current.error = '部分 Codeforces 比赛题单暂时无法核对，已保留现有题目，将在后续刷新重试'
+            elif kind == 'codeforces' and batch:
+                # AC and reward metadata are cached by catalog version.
+                current.updated_at = timezone.now()
             current.save()
             if kind != 'icpc' and state.get('phase') != 'enrich':
                 from .problem_difficulty import publish
